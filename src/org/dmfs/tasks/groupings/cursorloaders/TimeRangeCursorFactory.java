@@ -29,6 +29,8 @@ import android.text.format.Time;
 /**
  * A factory that builds shiny new {@link Cursor}s with time ranges.
  * 
+ * Note that all times are all-day and normalized to UTC. That means 2014-09-08 will be returned as 2014-09-08 00:00 UTC, no matter which time zone you're in.
+ * 
  * TODO: fix javadoc
  * 
  * @author Marten Gajda <marten@dmfs.org>
@@ -91,8 +93,12 @@ public class TimeRangeCursorFactory extends AbstractCustomCursorFactory
 
 	public final static String RANGE_NULL_ROW = "null_row";
 
+	public final static String RANGE_START_TZ_OFFSET = "start_tz_offset";
+
+	public final static String RANGE_END_TZ_OFFSET = "end_tz_offset";
+
 	public static final String[] DEFAULT_PROJECTION = new String[] { RANGE_START, RANGE_END, RANGE_ID, RANGE_YEAR, RANGE_MONTH, RANGE_OPEN_PAST,
-		RANGE_OPEN_FUTURE, RANGE_NULL_ROW, RANGE_TYPE };
+		RANGE_OPEN_FUTURE, RANGE_NULL_ROW, RANGE_TYPE, RANGE_START_TZ_OFFSET, RANGE_END_TZ_OFFSET };
 
 	protected final static long MAX_TIME = Long.MAX_VALUE / 2;
 	protected final static long MIN_TIME = Long.MIN_VALUE / 2;
@@ -100,34 +106,27 @@ public class TimeRangeCursorFactory extends AbstractCustomCursorFactory
 	protected final List<String> mProjectionList;
 
 	protected final Time mTime;
-	protected final Time mEndOfToday;
+	protected final TimeZone mTimezone;
 
 
 	public TimeRangeCursorFactory(String[] projection)
 	{
 		super(projection);
 		mProjectionList = Arrays.asList(projection);
-		mTime = new Time(TimeZone.getDefault().getID());
-		mEndOfToday = new Time(mTime.timezone);
+		mTimezone = TimeZone.getDefault();
+		mTime = new Time(mTimezone.getID());
 	}
 
 
 	public Cursor getCursor()
 	{
-		mTime.clear(TimeZone.getDefault().getID());
-		mEndOfToday.clear(mTime.timezone);
-		mEndOfToday.setToNow();
-		mEndOfToday.set(mEndOfToday.monthDay + 1, mEndOfToday.month, mEndOfToday.year);
+		mTime.setToNow();
 
 		MatrixCursor result = new MatrixCursor(mProjection);
 
 		// get time of today 00:00:00
-		Time time = new Time(mTime.timezone);
-		time.setToNow();
-		time.hour = 0;
-		time.minute = 0;
-		time.second = 0;
-		time.normalize(true);
+		Time time = new Time(mTimezone.getID());
+		time.set(mTime.monthDay, mTime.month, mTime.year);
 
 		// null row, for tasks without due date
 		if (mProjectionList.contains(RANGE_NULL_ROW))
@@ -179,7 +178,7 @@ public class TimeRangeCursorFactory extends AbstractCustomCursorFactory
 		long t6 = time.toMillis(false);
 		result.addRow(makeRow(7, TYPE_END_OF_A_YEAR, t5, t6));
 
-		// open past future for future tasks
+		// open future for future tasks
 		if (mProjectionList.contains(RANGE_OPEN_FUTURE))
 		{
 			result.addRow(makeRow(8, TYPE_NO_END, t6, MAX_TIME));
@@ -208,11 +207,21 @@ public class TimeRangeCursorFactory extends AbstractCustomCursorFactory
 		if (start == null || start <= MIN_TIME)
 		{
 			insertValue(result, RANGE_OPEN_PAST, 1);
+			insertValue(result, RANGE_START_TZ_OFFSET, 0);
+		}
+		else
+		{
+			insertValue(result, RANGE_START_TZ_OFFSET, mTimezone.getOffset(start));
 		}
 
 		if (end == null || end >= MAX_TIME)
 		{
 			insertValue(result, RANGE_OPEN_FUTURE, 1);
+			insertValue(result, RANGE_END_TZ_OFFSET, 0);
+		}
+		else
+		{
+			insertValue(result, RANGE_END_TZ_OFFSET, mTimezone.getOffset(end));
 		}
 
 		if (start == null && end == null)

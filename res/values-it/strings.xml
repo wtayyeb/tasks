@@ -17,6 +17,7 @@
     <string name="menu_sync_now_condensed">Aggiorna</string>
     <string name="toast_task_completed">\"%1s\" completata.</string>
     <string name="toast_task_uncompleted">\"%1s\" riaperta.</string>
+    <string name="toast_x_removed">\"%1s\" rimossa.</string>
 
     <plurals name="number_of_tasks">
         <item quantity="one">%d attività</item>
@@ -28,6 +29,8 @@
     <string name="activity_task_details_edit_task">Modifica attività</string>
     <string name="activity_task_details_delete">Elimina</string>
     <string name="activity_task_details_delete_task">Elimina attività</string>
+    <string name="activity_task_details_complete">Completata</string>
+    <string name="activity_task_details_complete_task">Completata attività</string>
 
     <!-- Task editor -->
     <string name="activity_edit_task_title">Modifica Attività</string>
@@ -66,7 +69,6 @@
     <string name="task_group_due_in_month">Scadono in %s</string>
     <string name="task_group_due_in_year">Scadono nel %s</string>
     <string name="task_group_due_in_future">Scadono successivamente</string>
-    <string name="today">Oggi</string>
 
     <!-- Task editor labels -->
 
@@ -116,5 +118,6 @@
 
     <!-- Strings for Task List Widget -->
     <string name="task_list_widget_title">Attività correnti</string>
+    <string name="task_list_widget_title_4x4">Attività correnti 4x4</string>
 
 </resources>

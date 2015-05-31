@@ -37,6 +37,7 @@ import android.content.Context;
 import android.net.Uri;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.util.Log;
 
 
 /**
@@ -49,6 +50,8 @@ import android.os.Parcelable;
  */
 public final class ContentSet implements OnContentLoadedListener, Parcelable
 {
+	private static final String TAG = "ContentSet";
+
 	/**
 	 * The {@link ContentValues} that have been read from the database (or <code>null</code> for insert operations).
 	 */
@@ -91,6 +94,11 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 	 */
 	private Set<String> mAfterKeys;
 
+	/**
+	 * Indicates that loading is in process.
+	 */
+	private boolean mLoading = false;
+
 
 	/**
 	 * Private constructor that is used when creating a ContentSet form a parcel.
@@ -119,6 +127,34 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 
 
 	/**
+	 * Clone constructor.
+	 * 
+	 * @param other
+	 *            The {@link ContentSet} to clone.
+	 */
+	public ContentSet(ContentSet other)
+	{
+		if (other == null)
+		{
+			throw new IllegalArgumentException("other must not be null");
+		}
+
+		if (other.mBeforeContentValues != null)
+		{
+			mBeforeContentValues = new ContentValues(other.mBeforeContentValues);
+		}
+
+		if (other.mAfterContentValues != null)
+		{
+			mAfterContentValues = new ContentValues(other.mAfterContentValues);
+			mAfterKeys = new HashSet<String>(other.mAfterKeys);
+		}
+
+		mUri = other.mUri;
+	}
+
+
+	/**
 	 * Load the content. This method must not be called if the URI of this ContentSet is a directory URI and it has not been persited yet.
 	 * 
 	 * @param context
@@ -131,6 +167,7 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 		String itemType = context.getContentResolver().getType(mUri);
 		if (itemType != null && !itemType.startsWith(ContentResolver.CURSOR_DIR_BASE_TYPE))
 		{
+			mLoading = true;
 			new AsyncContentLoader(context, this, mapper).execute(mUri);
 		}
 		else
@@ -144,7 +181,19 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 	public void onContentLoaded(ContentValues values)
 	{
 		mBeforeContentValues = values;
+		mLoading = false;
 		notifyLoadedListeners();
+	}
+
+
+	/**
+	 * Returns whether this {@link ContentSet} is currently loading values.
+	 * 
+	 * @return <code>true</code> is an asynchronous loading operation is in progress, <code>false</code> otherwise.
+	 */
+	public boolean isLoading()
+	{
+		return mLoading;
 	}
 
 
@@ -156,19 +205,27 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 	 */
 	public void delete(Context context)
 	{
-		String itemType = context.getContentResolver().getType(mUri);
-		if (itemType != null && !itemType.startsWith(ContentResolver.CURSOR_DIR_BASE_TYPE))
+		if (mUri != null)
 		{
-			context.getContentResolver().delete(mUri, null, null);
-			mBeforeContentValues = null;
-			mAfterContentValues = null;
-			mAfterKeys = null;
-			mUri = null;
+			String itemType = context.getContentResolver().getType(mUri);
+			if (itemType != null && !itemType.startsWith(ContentResolver.CURSOR_DIR_BASE_TYPE))
+			{
+				context.getContentResolver().delete(mUri, null, null);
+				mBeforeContentValues = null;
+				mAfterContentValues = null;
+				mAfterKeys = null;
+				mUri = null;
+			}
+			else
+			{
+				throw new UnsupportedOperationException("Can not load delete a directoy URI: " + mUri);
+			}
 		}
 		else
 		{
-			throw new UnsupportedOperationException("Can not load delete a directoy URI: " + mUri);
+			Log.w(TAG, "Trying to delete empty ContentSet");
 		}
+
 	}
 
 
@@ -190,6 +247,8 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 			context.getContentResolver().update(mUri, mAfterContentValues, null, null);
 		}
 		// else nothing to do
+
+		mAfterContentValues = null;
 
 		return mUri;
 	}
@@ -291,6 +350,18 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 		Integer oldValue = getAsInteger(key);
 		if (value != null && !value.equals(oldValue) || value == null && oldValue != null)
 		{
+			if (mBeforeContentValues != null && mBeforeContentValues.containsKey(key))
+			{
+				Integer beforeValue = mBeforeContentValues.getAsInteger(key);
+				if (beforeValue != null && beforeValue.equals(value) || beforeValue == null && value == null)
+				{
+					// value equals before value, so remove it from after values
+					mAfterContentValues.remove(key);
+					mAfterKeys.remove(key);
+					notifyUpdateListeners(key);
+					return;
+				}
+			}
 			// value has changed, update
 			ensureAfter().put(key, value);
 			mAfterKeys.add(key);
@@ -315,6 +386,18 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 		Long oldValue = getAsLong(key);
 		if (value != null && !value.equals(oldValue) || value == null && oldValue != null)
 		{
+			if (mBeforeContentValues != null && mBeforeContentValues.containsKey(key))
+			{
+				Long beforeValue = mBeforeContentValues.getAsLong(key);
+				if (beforeValue != null && beforeValue.equals(value) || beforeValue == null && value == null)
+				{
+					// value equals before value, so remove it from after values
+					mAfterContentValues.remove(key);
+					mAfterKeys.remove(key);
+					notifyUpdateListeners(key);
+					return;
+				}
+			}
 			ensureAfter().put(key, value);
 			mAfterKeys.add(key);
 			notifyUpdateListeners(key);
@@ -338,6 +421,18 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 		String oldValue = getAsString(key);
 		if (value != null && !value.equals(oldValue) || value == null && oldValue != null)
 		{
+			if (mBeforeContentValues != null && mBeforeContentValues.containsKey(key))
+			{
+				String beforeValue = mBeforeContentValues.getAsString(key);
+				if (beforeValue != null && beforeValue.equals(value) || beforeValue == null && value == null)
+				{
+					// value equals before value, so remove it from after values
+					mAfterContentValues.remove(key);
+					mAfterKeys.remove(key);
+					notifyUpdateListeners(key);
+					return;
+				}
+			}
 			ensureAfter().put(key, value);
 			mAfterKeys.add(key);
 			notifyUpdateListeners(key);
@@ -356,9 +451,56 @@ public final class ContentSet implements OnContentLoadedListener, Parcelable
 	}
 
 
+	public void put(String key, Float value)
+	{
+		Float oldValue = getAsFloat(key);
+		if (value != null && !value.equals(oldValue) || value == null && oldValue != null)
+		{
+			if (mBeforeContentValues != null && mBeforeContentValues.containsKey(key))
+			{
+				Float beforeValue = mBeforeContentValues.getAsFloat(key);
+				if (beforeValue != null && beforeValue.equals(value) || beforeValue == null && value == null)
+				{
+					// value equals before value, so remove it from after values
+					mAfterContentValues.remove(key);
+					mAfterKeys.remove(key);
+					notifyUpdateListeners(key);
+					return;
+				}
+			}
+			ensureAfter().put(key, value);
+			mAfterKeys.add(key);
+			notifyUpdateListeners(key);
+		}
+	}
+
+
+	public Float getAsFloat(String key)
+	{
+		final ContentValues after = mAfterContentValues;
+		if (after != null && after.containsKey(key))
+		{
+			return mAfterContentValues.getAsFloat(key);
+		}
+		return mBeforeContentValues == null ? null : mBeforeContentValues.getAsFloat(key);
+	}
+
+
 	/**
-	 * Start a new bulk update. You should use this when you update multiple values at once and you don't want to send an update notification every time.
-	 * When you're done call {@link #finishBulkUpdate()} which sned the notifications (unless there is another bulk update in progress).
+	 * Returns the Uri this {@link ContentSet} is read from (or has been written to). This may be a directory {@link Uri} if the ContentSet has not been stored
+	 * yet.
+	 * 
+	 * @return The {@link Uri}.
+	 */
+	public Uri getUri()
+	{
+		return mUri;
+	}
+
+
+	/**
+	 * Start a new bulk update. You should use this when you update multiple values at once and you don't want to send an update notification every time. When
+	 * you're done call {@link #finishBulkUpdate()} which sned the notifications (unless there is another bulk update in progress).
 	 */
 	public void startBulkUpdate()
 	{

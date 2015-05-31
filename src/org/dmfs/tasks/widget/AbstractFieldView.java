@@ -18,6 +18,7 @@
 package org.dmfs.tasks.widget;
 
 import org.dmfs.provider.tasks.TaskContract.Tasks;
+import org.dmfs.tasks.R;
 import org.dmfs.tasks.model.ContentSet;
 import org.dmfs.tasks.model.FieldDescriptor;
 import org.dmfs.tasks.model.OnContentChangeListener;
@@ -26,7 +27,9 @@ import org.dmfs.tasks.model.adapters.IntegerFieldAdapter;
 import org.dmfs.tasks.model.layout.LayoutDescriptor;
 import org.dmfs.tasks.model.layout.LayoutOptions;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.res.TypedArray;
 import android.graphics.Color;
 import android.util.AttributeSet;
 import android.view.View;
@@ -67,6 +70,8 @@ public abstract class AbstractFieldView extends LinearLayout implements OnConten
 	 */
 	protected LayoutOptions mLayoutOptions;
 
+	private int mFieldId = 0;
+
 
 	public AbstractFieldView(Context context)
 	{
@@ -77,12 +82,36 @@ public abstract class AbstractFieldView extends LinearLayout implements OnConten
 	public AbstractFieldView(Context context, AttributeSet attrs)
 	{
 		super(context, attrs);
+		loadAttrs(attrs);
 	}
 
 
+	@SuppressLint("NewApi")
 	public AbstractFieldView(Context context, AttributeSet attrs, int defStyle)
 	{
 		super(context, attrs, defStyle);
+		loadAttrs(attrs);
+	}
+
+
+	private void loadAttrs(AttributeSet attrs)
+	{
+		TypedArray typedArray = getContext().obtainStyledAttributes(attrs, R.styleable.AbstractFieldView);
+
+		mFieldId = typedArray.getResourceId(R.styleable.AbstractFieldView_fieldDescriptor, 0);
+
+		typedArray.recycle();
+	}
+
+
+	/**
+	 * Returns the field id of this field or <code>0</code> if non was defined.
+	 * 
+	 * @return The field id of this field.
+	 */
+	public int getFieldId()
+	{
+		return mFieldId;
 	}
 
 
@@ -94,6 +123,12 @@ public abstract class AbstractFieldView extends LinearLayout implements OnConten
 	 */
 	public void setValue(ContentSet values)
 	{
+		if (values == mValues)
+		{
+			// same values, nothing to do
+			return;
+		}
+
 		FieldAdapter<?> adapter = mFieldDescriptor.getFieldAdapter();
 		if (mValues != null)
 		{
@@ -115,6 +150,15 @@ public abstract class AbstractFieldView extends LinearLayout implements OnConten
 		{
 			adapter.registerListener(values, this, true);
 		}
+	}
+
+
+	/**
+	 * Request the view to update the value {@link ContentSet} with all pending changes if any. This is usually called before a task is about to be saved.
+	 */
+	public void updateValues()
+	{
+		// nothing by default
 	}
 
 
@@ -149,6 +193,7 @@ public abstract class AbstractFieldView extends LinearLayout implements OnConten
 	 * @param options
 	 *            Any {@link LayoutOptions}.
 	 */
+	@SuppressLint("DefaultLocale")
 	public void setFieldDescription(FieldDescriptor descriptor, LayoutOptions options)
 	{
 		mLayoutOptions = options;
@@ -163,13 +208,27 @@ public abstract class AbstractFieldView extends LinearLayout implements OnConten
 			else
 			{
 				titleId.setText(descriptor.getTitle().toUpperCase());
-				Integer customBackgroud = getCustomBackgroundColor();
-				if (customBackgroud != null)
-				{
-					titleId.setTextColor(AbstractFieldView.getTextColorFromBackground(customBackgroud));
-				}
 			}
 		}
+
+		// set icon if we have any
+
+		// Note that the icon view is actually a TextView, not an ImageView and we just set a compound drawable. That ensures the image is always nicely
+		// aligned with the first text line.
+		TextView icon = (TextView) findViewById(android.R.id.icon);
+		if (icon != null)
+		{
+			if (descriptor.getIcon() != 0)
+			{
+				icon.setCompoundDrawablesWithIntrinsicBounds(descriptor.getIcon(), 0, 0, 0);
+				icon.setVisibility(View.VISIBLE);
+			}
+			else
+			{
+				icon.setVisibility(View.GONE);
+			}
+		}
+
 	}
 
 

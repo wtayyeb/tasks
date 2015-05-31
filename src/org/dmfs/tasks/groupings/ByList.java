@@ -17,15 +17,12 @@
 
 package org.dmfs.tasks.groupings;
 
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.TimeZone;
-
 import org.dmfs.provider.tasks.TaskContract.Instances;
 import org.dmfs.provider.tasks.TaskContract.TaskLists;
+import org.dmfs.tasks.QuickAddDialogFragment;
 import org.dmfs.tasks.R;
 import org.dmfs.tasks.groupings.cursorloaders.CursorLoaderFactory;
+import org.dmfs.tasks.model.TaskFieldAdapters;
 import org.dmfs.tasks.utils.ExpandableChildDescriptor;
 import org.dmfs.tasks.utils.ExpandableGroupDescriptor;
 import org.dmfs.tasks.utils.ExpandableGroupDescriptorAdapter;
@@ -36,10 +33,11 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.database.Cursor;
 import android.graphics.Paint;
-import android.text.format.Time;
+import android.os.Build.VERSION;
+import android.support.v4.app.FragmentActivity;
 import android.view.View;
+import android.view.View.OnClickListener;
 import android.widget.BaseExpandableListAdapter;
-import android.widget.FrameLayout.LayoutParams;
 import android.widget.TextView;
 
 
@@ -62,28 +60,13 @@ import android.widget.TextView;
  * @author Marten Gajda <marten@dmfs.org>
  */
 @TargetApi(11)
-public interface ByList
+public class ByList extends AbstractGroupingFactory
 {
 	/**
 	 * A {@link ViewDescriptor} that knows how to present the tasks in the task list.
 	 */
-	public final ViewDescriptor TASK_VIEW_DESCRIPTOR = new ViewDescriptor()
+	public final ViewDescriptor TASK_VIEW_DESCRIPTOR = new BaseTaskViewDescriptor()
 	{
-		/**
-		 * We use this to get the current time.
-		 */
-		private Time mNow;
-
-		/**
-		 * The formatter we use for due dates other than today.
-		 */
-		private final DateFormat mDateFormatter = DateFormat.getDateInstance(SimpleDateFormat.MEDIUM);
-
-		/**
-		 * The formatter we use for tasks that are due today.
-		 */
-		private final DateFormat mTimeFormatter = SimpleDateFormat.getTimeInstance(SimpleDateFormat.SHORT);
-
 		private int mFlingContentViewId = R.id.flingContentView;
 		private int mFlingRevealLeftViewId = R.id.fling_reveal_left;
 		private int mFlingRevealRightViewId = R.id.fling_reveal_right;
@@ -92,27 +75,10 @@ public interface ByList
 		@Override
 		public void populateView(View view, Cursor cursor, BaseExpandableListAdapter adapter, int flags)
 		{
-			TextView title = (TextView) view.findViewById(android.R.id.title);
+			TextView title = (TextView) getView(view, android.R.id.title);
 			boolean isClosed = cursor.getInt(13) > 0;
 
-			// get the view inside that was flinged if the view has an integrated fling content view
-			View flingContentView = (View) view.findViewById(mFlingContentViewId);
-			if (flingContentView == null)
-			{
-				flingContentView = view;
-			}
-
-			if (android.os.Build.VERSION.SDK_INT >= 14)
-			{
-				flingContentView.setTranslationX(0);
-				flingContentView.setAlpha(1);
-			}
-			else
-			{
-				LayoutParams layoutParams = (LayoutParams) flingContentView.getLayoutParams();
-				layoutParams.setMargins(0, layoutParams.topMargin, 0, layoutParams.bottomMargin);
-				flingContentView.setLayoutParams(layoutParams);
-			}
+			resetFlingView(view);
 
 			if (title != null)
 			{
@@ -128,54 +94,17 @@ public interface ByList
 				}
 			}
 
-			TextView dueDateField = (TextView) view.findViewById(R.id.task_due_date);
-			if (dueDateField != null)
-			{
-				Time dueDate = Common.DUE_ADAPTER.get(cursor);
+			setDueDate((TextView) getView(view, R.id.task_due_date), null, INSTANCE_DUE_ADAPTER.get(cursor), isClosed);
 
-				if (dueDate != null)
-				{
-					if (mNow == null)
-					{
-						mNow = new Time();
-					}
-					mNow.clear(TimeZone.getDefault().getID());
-					mNow.setToNow();
-
-					dueDateField.setText(makeDueDate(dueDate, view.getContext()));
-
-					// highlight overdue dates & times
-					if (dueDate.before(mNow) && !isClosed)
-					{
-						dueDateField.setTextAppearance(view.getContext(), R.style.task_list_overdue_text);
-					}
-					else
-					{
-						dueDateField.setTextAppearance(view.getContext(), R.style.task_list_due_text);
-					}
-				}
-				else
-				{
-					dueDateField.setText("");
-				}
-			}
-
-			View colorbar = view.findViewById(R.id.colorbar);
-			if (colorbar != null)
-			{
-				colorbar.setVisibility(View.GONE);
-				// colorbar.setBackgroundColor(cursor.getInt(6));
-			}
-
-			View divider = view.findViewById(R.id.divider);
+			View divider = getView(view, R.id.divider);
 			if (divider != null)
 			{
 				divider.setVisibility((flags & FLAG_IS_LAST_CHILD) != 0 ? View.GONE : View.VISIBLE);
 			}
 
 			// display priority
-			int priority = cursor.getInt(cursor.getColumnIndex(Instances.PRIORITY));
-			View priorityView = view.findViewById(R.id.task_priority_view_medium);
+			int priority = TaskFieldAdapters.PRIORITY.get(cursor);
+			View priorityView = getView(view, R.id.task_priority_view_medium);
 			priorityView.setBackgroundResource(android.R.color.transparent);
 			priorityView.setVisibility(View.VISIBLE);
 
@@ -191,6 +120,27 @@ public interface ByList
 			{
 				priorityView.setBackgroundResource(R.color.priority_green);
 			}
+
+			if (VERSION.SDK_INT >= 11)
+			{
+				// update percentage background
+				View background = getView(view, R.id.percentage_background_view);
+				background.setPivotX(0);
+				Integer percentComplete = TaskFieldAdapters.PERCENT_COMPLETE.get(cursor);
+				if (percentComplete < 100)
+				{
+					background.setScaleX(percentComplete == null ? 0 : percentComplete / 100f);
+					background.setBackgroundResource(R.drawable.task_progress_background_shade);
+				}
+				else
+				{
+					background.setScaleX(1);
+					background.setBackgroundResource(R.drawable.complete_task_background_overlay);
+				}
+			}
+			setColorBar(view, cursor);
+			setDescription(view, cursor);
+			setOverlay(view, cursor.getPosition(), cursor.getCount());
 		}
 
 
@@ -198,41 +148,6 @@ public interface ByList
 		public int getView()
 		{
 			return R.layout.task_list_element;
-		}
-
-
-		/**
-		 * Get the due date to show. It returns just a time for tasks that are due today and a date otherwise.
-		 * 
-		 * @param due
-		 *            The due date to format.
-		 * @return A String with the formatted date.
-		 */
-		private String makeDueDate(Time due, Context context)
-		{
-			if (!due.allDay)
-			{
-				due.switchTimezone(TimeZone.getDefault().getID());
-			}
-
-			// normalize time to ensure yearDay is set properly
-			due.normalize(false);
-
-			if (due.year == mNow.year && due.yearDay == mNow.yearDay)
-			{
-				if (due.allDay)
-				{
-					return context.getString(R.string.today);
-				}
-				else
-				{
-					return context.getString(R.string.today) + ", " + mTimeFormatter.format(new Date(due.toMillis(false)));
-				}
-			}
-			else
-			{
-				return mDateFormatter.format(new Date(due.toMillis(false)));
-			}
 		}
 
 
@@ -301,17 +216,33 @@ public interface ByList
 
 			View colorbar1 = view.findViewById(R.id.colorbar1);
 			View colorbar2 = view.findViewById(R.id.colorbar2);
+			View quickAddTask = view.findViewById(R.id.quick_add_task);
+			if (quickAddTask != null)
+			{
+				quickAddTask.setOnClickListener(quickAddClickListener);
+				quickAddTask.setTag(cursor.getLong(cursor.getColumnIndex(TaskLists._ID)));
+			}
 
 			if ((flags & FLAG_IS_EXPANDED) != 0)
 			{
 				if (colorbar1 != null)
 				{
-					colorbar1.setBackgroundColor(cursor.getInt(2));
+					colorbar1.setBackgroundColor(TaskFieldAdapters.LIST_COLOR.get(cursor));
 					colorbar1.setVisibility(View.VISIBLE);
 				}
 				if (colorbar2 != null)
 				{
 					colorbar2.setVisibility(View.GONE);
+				}
+
+				// show quick add and hide task count
+				if (quickAddTask != null)
+				{
+					quickAddTask.setVisibility(View.VISIBLE);
+				}
+				if (text2 != null)
+				{
+					text2.setVisibility(View.GONE);
 				}
 			}
 			else
@@ -322,11 +253,35 @@ public interface ByList
 				}
 				if (colorbar2 != null)
 				{
-					colorbar2.setBackgroundColor(cursor.getInt(2));
+					colorbar2.setBackgroundColor(TaskFieldAdapters.LIST_COLOR.get(cursor));
 					colorbar2.setVisibility(View.VISIBLE);
+				}
+
+				// hide quick add and show task count
+				if (quickAddTask != null)
+				{
+					quickAddTask.setVisibility(View.GONE);
+				}
+				if (text2 != null)
+				{
+					text2.setVisibility(View.VISIBLE);
 				}
 			}
 		}
+
+		private final OnClickListener quickAddClickListener = new OnClickListener()
+		{
+
+			@Override
+			public void onClick(View v)
+			{
+				Long tag = (Long) v.getTag();
+				if (tag != null)
+				{
+					QuickAddDialogFragment.newInstance(tag).show(((FragmentActivity) v.getContext()).getSupportFragmentManager(), null);
+				}
+			}
+		};
 
 
 		@Override
@@ -371,19 +326,35 @@ public interface ByList
 
 	};
 
-	/**
-	 * A descriptor that knows how to load elements in a list group.
-	 */
-	public final static ExpandableChildDescriptor CHILD_DESCRIPTOR = new ExpandableChildDescriptor(Instances.CONTENT_URI, Common.INSTANCE_PROJECTION,
-		Instances.VISIBLE + "=1 and " + Instances.LIST_ID + "=?", Instances.INSTANCE_DUE + " is null, " + Instances.INSTANCE_DUE + ", " + Instances.TITLE, 0)
-		.setViewDescriptor(TASK_VIEW_DESCRIPTOR);
 
-	/**
-	 * A descriptor for the "grouped by list" view.
-	 */
-	public final static ExpandableGroupDescriptor GROUP_DESCRIPTOR = new ExpandableGroupDescriptor(new CursorLoaderFactory(TaskLists.CONTENT_URI, new String[] {
-		TaskLists._ID, TaskLists.LIST_NAME, TaskLists.LIST_COLOR, TaskLists.ACCOUNT_NAME }, TaskLists.VISIBLE + ">0 and " + TaskLists.SYNC_ENABLED + ">0",
-		null, TaskLists.ACCOUNT_NAME + ", " + TaskLists.LIST_NAME), CHILD_DESCRIPTOR).setViewDescriptor(GROUP_VIEW_DESCRIPTOR).setTitle(
-		R.string.task_group_all_title);
+	public ByList(String authority)
+	{
+		super(authority);
+	}
+
+
+	@Override
+	public ExpandableChildDescriptor makeExpandableChildDescriptor(String authority)
+	{
+		return new ExpandableChildDescriptor(Instances.getContentUri(authority), INSTANCE_PROJECTION, Instances.VISIBLE + "=1 and " + Instances.LIST_ID + "=?",
+			Instances.INSTANCE_DUE_SORTING + " is null, " + Instances.INSTANCE_DUE_SORTING + ", " + Instances.TITLE + " COLLATE NOCASE ASC", 0)
+			.setViewDescriptor(TASK_VIEW_DESCRIPTOR);
+	}
+
+
+	@Override
+	public ExpandableGroupDescriptor makeExpandableGroupDescriptor(String authority)
+	{
+		return new ExpandableGroupDescriptor(new CursorLoaderFactory(TaskLists.getContentUri(authority), new String[] { TaskLists._ID, TaskLists.LIST_NAME,
+			TaskLists.LIST_COLOR, TaskLists.ACCOUNT_NAME }, TaskLists.VISIBLE + ">0 and " + TaskLists.SYNC_ENABLED + ">0", null, TaskLists.ACCOUNT_NAME + ", "
+			+ TaskLists.LIST_NAME), makeExpandableChildDescriptor(authority)).setViewDescriptor(GROUP_VIEW_DESCRIPTOR);
+	}
+
+
+	@Override
+	public int getId()
+	{
+		return R.id.task_group_by_list;
+	}
 
 }

@@ -19,7 +19,7 @@ package org.dmfs.tasks.model;
 
 import org.dmfs.tasks.model.adapters.FieldAdapter;
 import org.dmfs.tasks.model.layout.LayoutDescriptor;
-import org.dmfs.tasks.widget.AbstractFieldEditor;
+import org.dmfs.tasks.model.layout.LayoutOptions;
 import org.dmfs.tasks.widget.AbstractFieldView;
 
 import android.content.Context;
@@ -34,6 +34,11 @@ import android.view.ViewGroup;
  */
 public final class FieldDescriptor
 {
+
+	/**
+	 * An id that identifies the field.
+	 */
+	private final int mFieldId;
 
 	/**
 	 * The title of the field.
@@ -72,6 +77,16 @@ public final class FieldDescriptor
 	 */
 	private LayoutDescriptor mViewLayout = null;
 
+	/**
+	 * Icon resource id of the field, if any.
+	 */
+	private int mIconId = 0;
+
+	/**
+	 * Specifies whether this field should be added automatically.
+	 */
+	private boolean mNoAutoAdd = false;
+
 
 	/**
 	 * Constructor for a new field description.
@@ -83,9 +98,9 @@ public final class FieldDescriptor
 	 * @param fieldAdapter
 	 *            A {@link FieldAdapter} for this field.
 	 */
-	public FieldDescriptor(Context context, int titleId, FieldAdapter<?> fieldAdapter)
+	public FieldDescriptor(Context context, int fieldId, int titleId, FieldAdapter<?> fieldAdapter)
 	{
-		this(context.getString(titleId), null, fieldAdapter);
+		this(fieldId, context.getString(titleId), null, fieldAdapter);
 	}
 
 
@@ -101,9 +116,9 @@ public final class FieldDescriptor
 	 * @param fieldAdapter
 	 *            A {@link FieldAdapter} for this field.
 	 */
-	public FieldDescriptor(Context context, int titleId, String contentType, FieldAdapter<?> fieldAdapter)
+	public FieldDescriptor(Context context, int fieldId, int titleId, String contentType, FieldAdapter<?> fieldAdapter)
 	{
-		this(context.getString(titleId), contentType, fieldAdapter);
+		this(fieldId, context.getString(titleId), contentType, fieldAdapter);
 	}
 
 
@@ -115,9 +130,9 @@ public final class FieldDescriptor
 	 * @param fieldAdapter
 	 *            A {@link FieldAdapter} for this field.
 	 */
-	public FieldDescriptor(String title, FieldAdapter<?> fieldAdapter)
+	public FieldDescriptor(int fieldId, String title, FieldAdapter<?> fieldAdapter)
 	{
-		this(title, null, fieldAdapter);
+		this(fieldId, title, null, fieldAdapter);
 	}
 
 
@@ -131,16 +146,41 @@ public final class FieldDescriptor
 	 * @param fieldAdapter
 	 *            A {@link FieldAdapter} for this field.
 	 */
-	public FieldDescriptor(String title, String contentType, FieldAdapter<?> fieldAdapter)
+	public FieldDescriptor(int fieldId, String title, String contentType, FieldAdapter<?> fieldAdapter)
 	{
 		if (fieldAdapter == null)
 		{
 			throw new NullPointerException("fieldAdapter must not be null!");
 		}
+		mFieldId = fieldId;
 		mTitle = title;
 		mContentType = contentType;
 		mHint = title; // use title as hint by default
 		mFieldAdapter = fieldAdapter;
+	}
+
+
+	/**
+	 * Returns the field id of the field this {@link FieldDescriptor} describes.
+	 * 
+	 * @return The field id.
+	 */
+	public int getFieldId()
+	{
+		return mFieldId;
+	}
+
+
+	public FieldDescriptor setNoAutoAdd(boolean noAutoAdd)
+	{
+		mNoAutoAdd = noAutoAdd;
+		return this;
+	}
+
+
+	public boolean autoAdd()
+	{
+		return !mNoAutoAdd;
 	}
 
 
@@ -152,6 +192,31 @@ public final class FieldDescriptor
 	public String getTitle()
 	{
 		return mTitle;
+	}
+
+
+	/**
+	 * Sets an icon id for this {@link FieldDescriptor}.
+	 * 
+	 * @param iconId
+	 *            The id of the icon resource.
+	 * @return This instance.
+	 */
+	public FieldDescriptor setIcon(int iconId)
+	{
+		mIconId = iconId;
+		return this;
+	}
+
+
+	/**
+	 * Get the icon id of this {@link FieldDescriptor}.
+	 * 
+	 * @return The icon resource id or <code>0</code> if there is no icon for this field.
+	 */
+	public int getIcon()
+	{
+		return mIconId;
 	}
 
 
@@ -234,16 +299,16 @@ public final class FieldDescriptor
 	 *            A {@link LayoutInflater}.
 	 * @param parent
 	 *            The parent {@link ViewGroup} of the editor.
-	 * @return An {@link AbstractFieldEditor} that can edit this field or <code>null</code> if this field is not editable.
+	 * @return An {@link AbstractFieldView} that can edit this field or <code>null</code> if this field is not editable.
 	 */
-	public AbstractFieldEditor getEditorView(LayoutInflater inflater, ViewGroup parent)
+	public AbstractFieldView getEditorView(LayoutInflater inflater, ViewGroup parent)
 	{
 		if (mEditLayout == null)
 		{
 			return null;
 		}
 
-		AbstractFieldEditor view = (AbstractFieldEditor) mEditLayout.inflate(inflater, parent, false);
+		AbstractFieldView view = (AbstractFieldView) mEditLayout.inflate(inflater, parent, false);
 		view.setFieldDescription(this, mEditLayout.getOptions());
 		return view;
 	}
@@ -254,9 +319,9 @@ public final class FieldDescriptor
 	 * 
 	 * @param inflater
 	 *            A {@link LayoutInflater}.
-	 * @return An {@link AbstractFieldEditor} that can edit this field or <code>null</code> if this field is not editable.
+	 * @return An {@link AbstractFieldView} that can edit this field or <code>null</code> if this field is not editable.
 	 */
-	public AbstractFieldEditor getEditorView(LayoutInflater inflater)
+	public AbstractFieldView getEditorView(LayoutInflater inflater)
 	{
 		return getEditorView(inflater, null);
 	}
@@ -301,6 +366,28 @@ public final class FieldDescriptor
 		AbstractFieldView view = (AbstractFieldView) mViewLayout.inflate(inflater);
 		view.setFieldDescription(this, mViewLayout.getOptions());
 		return view;
+	}
+
+
+	public LayoutOptions getViewLayoutOptions()
+	{
+		if (mViewLayout == null)
+		{
+			return null;
+		}
+
+		return mViewLayout.getOptions();
+	}
+
+
+	public LayoutOptions getEditLayoutOptions()
+	{
+		if (mEditLayout == null)
+		{
+			return null;
+		}
+
+		return mEditLayout.getOptions();
 	}
 
 

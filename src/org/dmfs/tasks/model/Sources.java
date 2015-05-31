@@ -23,6 +23,9 @@ import java.util.List;
 import java.util.Map;
 
 import org.dmfs.provider.tasks.TaskContract;
+import org.dmfs.tasks.R;
+import org.dmfs.tasks.utils.AsyncModelLoader;
+import org.dmfs.tasks.utils.OnModelLoadedListener;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
@@ -68,6 +71,8 @@ public final class Sources extends BroadcastReceiver implements OnAccountsUpdate
 	 */
 	private final AccountManager mAccountManager;
 
+	private final String mAuthority;
+
 
 	/**
 	 * Get the Sources singleton instance. Don't call this from the UI thread since it may take a long time to gather all the information from the account
@@ -84,6 +89,33 @@ public final class Sources extends BroadcastReceiver implements OnAccountsUpdate
 
 
 	/**
+	 * Load a model asynchronously. This might be executed as a synchronous operation if the models have been loaded already.
+	 * 
+	 * @param context
+	 *            A {@link Context}.
+	 * @param accountType
+	 *            The account type of the model to load.
+	 * @param listener
+	 *            The listener to call when the model has been loaded.
+	 * @return <code>true</code> if the models were loaded already and the operation was executed synchronously, <code>false</code> otherwise.
+	 */
+	public static boolean loadModelAsync(Context context, String accountType, OnModelLoadedListener listener)
+	{
+		if (sInstance == null)
+		{
+			new AsyncModelLoader(context, listener).execute(accountType);
+			return false;
+		}
+		else
+		{
+			Sources sources = getInstance(context);
+			listener.onModelLoaded(sources.getModel(accountType));
+			return true;
+		}
+	}
+
+
+	/**
 	 * Initialize all model sources.
 	 * 
 	 * @param context
@@ -91,6 +123,8 @@ public final class Sources extends BroadcastReceiver implements OnAccountsUpdate
 	private Sources(Context context)
 	{
 		mContext = context.getApplicationContext();
+
+		mAuthority = context.getString(R.string.org_dmfs_tasks_authority);
 
 		// register to receive package changes
 		IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
@@ -125,13 +159,19 @@ public final class Sources extends BroadcastReceiver implements OnAccountsUpdate
 
 		for (SyncAdapterType syncAdapter : syncAdapters)
 		{
-			if (!TaskContract.AUTHORITY.equals(syncAdapter.authority))
+			if (!mAuthority.equals(syncAdapter.authority))
 			{
 				// this sync-adapter is not for Tasks, skip it
 				continue;
 			}
 
 			AuthenticatorDescription authenticator = getAuthenticator(authenticators, syncAdapter.accountType);
+
+			if (authenticator == null)
+			{
+				// no authenticator for this account available
+				continue;
+			}
 
 			Model model;
 			try
@@ -229,7 +269,7 @@ public final class Sources extends BroadcastReceiver implements OnAccountsUpdate
 		Account[] accounts = mAccountManager.getAccounts();
 		for (Account account : accounts)
 		{
-			if (getModel(account.type) != null && ContentResolver.getIsSyncable(account, TaskContract.AUTHORITY) > 0)
+			if (getModel(account.type) != null && ContentResolver.getIsSyncable(account, mAuthority) > 0)
 			{
 				result.add(account);
 			}

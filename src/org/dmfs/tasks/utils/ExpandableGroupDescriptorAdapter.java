@@ -20,11 +20,13 @@ package org.dmfs.tasks.utils;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.dmfs.tasks.groupings.cursorloaders.EmptyCursorLoaderFactory;
 import org.dmfs.tasks.groupings.filters.AbstractFilter;
 
 import android.content.Context;
 import android.database.Cursor;
 import android.os.Bundle;
+import android.os.Handler;
 import android.support.v4.app.LoaderManager;
 import android.support.v4.content.Loader;
 import android.view.LayoutInflater;
@@ -53,6 +55,7 @@ public class ExpandableGroupDescriptorAdapter extends CursorTreeAdapter implemen
 	private ExpandableGroupDescriptor mDescriptor;
 	private OnChildLoadedListener mOnChildLoadedListener;
 	private AbstractFilter mChildCursorFilter;
+	private Handler mHandler = new Handler();
 
 
 	public ExpandableGroupDescriptorAdapter(Context context, LoaderManager loaderManager, ExpandableGroupDescriptor descriptor)
@@ -100,7 +103,16 @@ public class ExpandableGroupDescriptorAdapter extends CursorTreeAdapter implemen
 		{
 			return mDescriptor.getChildCursorLoader(mContext, cursor, mChildCursorFilter);
 		}
-		return null;
+
+		// we can't return a valid loader for the child cursor if cursor is null, so return an empty cursor without any rows.
+		return new EmptyCursorLoaderFactory(mContext, new String[] { "_id" });
+	}
+
+
+	@Override
+	public boolean hasStableIds()
+	{
+		return true;
 	}
 
 
@@ -117,7 +129,7 @@ public class ExpandableGroupDescriptorAdapter extends CursorTreeAdapter implemen
 
 			if (mOnChildLoadedListener != null)
 			{
-				mOnChildLoadedListener.onChildLoaded(pos);
+				mOnChildLoadedListener.onChildLoaded(pos, cursor);
 			}
 		}
 	}
@@ -151,20 +163,44 @@ public class ExpandableGroupDescriptorAdapter extends CursorTreeAdapter implemen
 	@Override
 	protected Cursor getChildrenCursor(Cursor groupCursor)
 	{
-		// the child cursor is no longer valid
-		mLoadedGroups.remove(groupCursor.getPosition());
-		mLoaderManager.restartLoader(groupCursor.getPosition(), null, this);
+		reloadGroup(groupCursor.getPosition());
 		return null;
 	}
 
 
-	public void reloadGroup(int position)
+	public void reloadGroup(final int position)
 	{
 		// the child cursor is no longer valid
 		mLoadedGroups.remove(position);
 		if (position < getGroupCount())
 		{
-			mLoaderManager.restartLoader(position, null, this);
+			mHandler.post(new Runnable()
+			{
+
+				@Override
+				public void run()
+				{
+					if (position < getGroupCount()) // ensure this is still true
+					{
+						mLoaderManager.restartLoader(position, null, ExpandableGroupDescriptorAdapter.this);
+					}
+				}
+			});
+		}
+	}
+
+
+	public void reloadLoadedGroups()
+	{
+		// we operate on a copy of the set to avoid concurrent modification when a group is loaded before we're done here
+		for (Integer i : new HashSet<Integer>(mLoadedGroups))
+		{
+			int getGroupCount = getGroupCount();
+			if (i < getGroupCount)
+			{
+				mLoadedGroups.remove(i);
+				mLoaderManager.restartLoader(i, null, ExpandableGroupDescriptorAdapter.this);
+			}
 		}
 	}
 

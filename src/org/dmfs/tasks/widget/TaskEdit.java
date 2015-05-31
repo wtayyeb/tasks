@@ -67,10 +67,13 @@ public class TaskEdit extends BaseTaskView
 		 */
 		for (FieldDescriptor field : mModel.getFields())
 		{
-			AbstractFieldView detailView = field.getEditorView(inflater, this);
-			if (detailView != null)
+			if (field.autoAdd())
 			{
-				addView(detailView);
+				AbstractFieldView detailView = field.getEditorView(inflater, this);
+				if (detailView != null)
+				{
+					addView(detailView);
+				}
 			}
 		}
 	}

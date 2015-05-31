@@ -20,14 +20,17 @@ package org.dmfs.tasks.widget;
 import org.dmfs.tasks.model.ContentSet;
 import org.dmfs.tasks.model.FieldDescriptor;
 import org.dmfs.tasks.model.adapters.StringFieldAdapter;
+import org.dmfs.tasks.model.layout.LayoutDescriptor;
 import org.dmfs.tasks.model.layout.LayoutOptions;
 
 import android.content.Context;
-import android.text.Editable;
+import android.os.Build;
 import android.text.InputType;
 import android.text.TextUtils;
-import android.text.TextWatcher;
 import android.util.AttributeSet;
+import android.view.View;
+import android.view.View.OnFocusChangeListener;
+import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 
 
@@ -44,7 +47,7 @@ import android.widget.EditText;
  * 
  * @author Marten Gajda <marten@dmfs.org>
  */
-public class TextFieldEditor extends AbstractFieldEditor implements TextWatcher
+public class TextFieldEditor extends AbstractFieldEditor implements OnFocusChangeListener
 {
 	private StringFieldAdapter mAdapter;
 	private EditText mText;
@@ -75,13 +78,16 @@ public class TextFieldEditor extends AbstractFieldEditor implements TextWatcher
 		mText = (EditText) findViewById(android.R.id.text1);
 		if (mText != null)
 		{
-			mText.addTextChangedListener(this);
-
 			/*
-			 * enable memory leak workaround: disable spell checker
+			 * enable memory leak workaround on android < 4.3: disable spell checker
 			 */
+
 			int inputType = mText.getInputType();
-			mText.setInputType(inputType | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+			if (Build.VERSION.SDK_INT < 18)
+			{
+				mText.setInputType(inputType | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+			}
+			mText.setOnFocusChangeListener(this);
 		}
 	}
 
@@ -92,35 +98,31 @@ public class TextFieldEditor extends AbstractFieldEditor implements TextWatcher
 		super.setFieldDescription(descriptor, layoutOptions);
 		mAdapter = (StringFieldAdapter) descriptor.getFieldAdapter();
 		mText.setHint(descriptor.getHint());
-	}
 
-
-	@Override
-	public void afterTextChanged(Editable s)
-	{
-		if (mValues != null)
+		if (layoutOptions != null)
 		{
-			final String newText = s.toString();
-			final String oldText = mAdapter.get(mValues);
-			if (!TextUtils.equals(newText, oldText)) // don't trigger unnecessary updates
+			boolean multiLine = layoutOptions.getBoolean(LayoutDescriptor.OPTION_MULTILINE, true);
+			mText.setSingleLine(!multiLine);
+			if (!multiLine)
 			{
-				mAdapter.set(mValues, newText);
+				mText.setImeOptions(EditorInfo.IME_ACTION_DONE);
 			}
 		}
 	}
 
 
 	@Override
-	public void beforeTextChanged(CharSequence s, int start, int count, int after)
+	public void updateValues()
 	{
-		// nothing to do here
-	}
-
-
-	@Override
-	public void onTextChanged(CharSequence s, int start, int before, int count)
-	{
-		// nothing to do here
+		if (mValues != null)
+		{
+			final String newText = mText.getText().toString();
+			final String oldText = mAdapter.get(mValues);
+			if (!TextUtils.equals(newText, oldText)) // don't trigger unnecessary updates
+			{
+				mAdapter.set(mValues, newText);
+			}
+		}
 	}
 
 
@@ -135,6 +137,17 @@ public class TextFieldEditor extends AbstractFieldEditor implements TextWatcher
 			{
 				mText.setText(newValue);
 			}
+		}
+	}
+
+
+	@Override
+	public void onFocusChange(View v, boolean hasFocus)
+	{
+		if (!hasFocus)
+		{
+			// we've just lost the focus, ensure we update the values
+			updateValues();
 		}
 	}
 }

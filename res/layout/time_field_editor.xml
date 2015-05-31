@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <org.dmfs.tasks.widget.TimeFieldEditor xmlns:android="http://schemas.android.com/apk/res/android"
-    style="@style/task_widget" >
+    style="@style/task_edit_widget" >
 
     <include layout="@layout/editor_header" />
 
@@ -8,6 +8,7 @@
         android:layout_width="fill_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
+        android:layout_gravity="center_vertical"
         android:orientation="horizontal" >
 
         <Button

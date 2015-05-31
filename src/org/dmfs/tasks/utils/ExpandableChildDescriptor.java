@@ -26,8 +26,6 @@ import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.support.v4.content.CursorLoader;
-import android.text.TextUtils;
-import android.util.Log;
 
 
 /**
@@ -41,13 +39,19 @@ import android.util.Log;
  */
 public class ExpandableChildDescriptor
 {
-	private final Uri mUri;
-	private final String[] mProjection;
-	private final String mSelection;
-	private final int[] mSelectionColumns;
-	private final String mSortOrder;
+	protected Uri mUri;
+	protected String[] mProjection;
+	protected String mSelection;
+	protected int[] mSelectionColumns;
+	protected String mSortOrder;
 
 	private ViewDescriptor mViewDescriptor;
+
+
+	protected ExpandableChildDescriptor()
+	{
+
+	};
 
 
 	/**
@@ -86,7 +90,7 @@ public class ExpandableChildDescriptor
 		String[] selectionArgs = null;
 		String selection = mSelection;
 
-		if (mSelectionColumns.length > 0)
+		if (mSelectionColumns != null && mSelectionColumns.length > 0)
 		{
 			/*
 			 * The columns in cursor may be null, but the selection arguments for the CursorLoader must be non-null.
@@ -150,9 +154,35 @@ public class ExpandableChildDescriptor
 			}
 			selection = selectionBuilder.toString();
 		}
+		else
+		{
+			if (filter != null)
+			{
+				// temporary array list for the selection arguments
+				List<String> selectionArgList = new ArrayList<String>();
+				if (filter != null)
+				{
+					filter.getSelectionArgs(selectionArgList);
+				}
+				selectionArgs = selectionArgList.toArray(new String[selectionArgList.size()]);
 
-		Log.v("", selection.toString() + " " + TextUtils.join(",", selectionArgs));
-		return new CursorLoader(context, mUri, mProjection, selection.toString(), selectionArgs, mSortOrder);
+				StringBuilder selectionBuilder = new StringBuilder(120);
+
+				{
+					selectionBuilder.append("(");
+					filter.getSelection(selectionBuilder);
+					selectionBuilder.append(")");
+				}
+				selection = selectionBuilder.toString();
+			}
+		}
+
+		String selectionString = null;
+		if (selection != null)
+		{
+			selectionString = selection.toString();
+		}
+		return new CursorLoader(context, mUri, mProjection, selectionString, selectionArgs, mSortOrder);
 	}
 
 

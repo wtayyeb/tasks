@@ -20,6 +20,7 @@ package org.dmfs.tasks.model.adapters;
 import org.dmfs.tasks.model.ContentSet;
 import org.dmfs.tasks.model.OnContentChangeListener;
 
+import android.content.ContentValues;
 import android.database.Cursor;
 
 
@@ -114,6 +115,13 @@ public final class BooleanFieldAdapter extends FieldAdapter<Boolean>
 
 
 	@Override
+	public void set(ContentValues values, Boolean value)
+	{
+		values.put(mFieldName, value ? 1 : 0);
+	}
+
+
+	@Override
 	public void registerListener(ContentSet values, OnContentChangeListener listener, boolean initalNotification)
 	{
 		values.addOnChangeListener(listener, mFieldName, initalNotification);
@@ -124,5 +132,11 @@ public final class BooleanFieldAdapter extends FieldAdapter<Boolean>
 	public void unregisterListener(ContentSet values, OnContentChangeListener listener)
 	{
 		values.removeOnChangeListener(listener, mFieldName);
+	}
+
+
+	public String getFieldName()
+	{
+		return mFieldName;
 	}
 }

@@ -17,15 +17,26 @@
 
 package org.dmfs.tasks;
 
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+
+import org.dmfs.android.retentionmagic.SupportFragment;
+import org.dmfs.android.retentionmagic.annotations.Parameter;
+import org.dmfs.android.retentionmagic.annotations.Retain;
 import org.dmfs.provider.tasks.TaskContract.Tasks;
 import org.dmfs.tasks.model.ContentSet;
 import org.dmfs.tasks.model.Model;
 import org.dmfs.tasks.model.OnContentChangeListener;
-import org.dmfs.tasks.utils.AsyncModelLoader;
+import org.dmfs.tasks.model.Sources;
+import org.dmfs.tasks.model.TaskFieldAdapters;
 import org.dmfs.tasks.utils.ContentValueMapper;
 import org.dmfs.tasks.utils.OnModelLoadedListener;
+import org.dmfs.tasks.widget.ListenableScrollView;
+import org.dmfs.tasks.widget.ListenableScrollView.OnScrollListener;
 import org.dmfs.tasks.widget.TaskView;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ContentValues;
@@ -33,16 +44,25 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
 import android.database.ContentObserver;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
+import android.os.Build.VERSION;
 import android.os.Bundle;
 import android.support.v4.app.ActivityCompat;
-import android.support.v4.app.Fragment;
+import android.support.v7.app.ActionBar;
+import android.support.v7.app.ActionBarActivity;
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.widget.ImageView;
+import android.widget.Toast;
 
 
 /**
@@ -52,35 +72,42 @@ import android.view.ViewGroup;
  * @author Arjun Naik <arjun@arjunnaik.in>
  * @author Marten Gajda <marten@dmfs.org>
  */
-public class ViewTaskFragment extends Fragment implements OnModelLoadedListener, OnContentChangeListener
+public class ViewTaskFragment extends SupportFragment implements OnModelLoadedListener, OnContentChangeListener
 {
-	/**
-	 * The key we use to store the {@link ContentSet} that holds the values we show.
-	 */
-	private static final String STATE_VALUES = "values";
+	private final static String ARG_URI = "uri";
 
 	/**
-	 * The key we use to store the {@link Uri} of the task we show.
+	 * Edit action assigned to the floating action button.
 	 */
-	private static final String STATE_TASK_URI = "task_uri";
+	private final static int ACTION_EDIT = 1;
+
+	/**
+	 * Complete action assigned to the floating action button.
+	 */
+	private final static int ACTION_COMPLETE = 2;
+
+	/**
+	 * A set of values that may affect the recurrence set of a task. If one of these values changes we have to submit all of them.
+	 */
+	private final static Set<String> RECURRENCE_VALUES = new HashSet<String>(Arrays.asList(new String[] { Tasks.DUE, Tasks.DTSTART, Tasks.TZ, Tasks.IS_ALLDAY,
+		Tasks.RRULE, Tasks.RDATE, Tasks.EXDATE }));
 
 	/**
 	 * The {@link ContentValueMapper} that knows how to map the values in a cursor to {@link ContentValues}.
 	 */
-	private static final ContentValueMapper CONTENT_VALUE_MAPPER = new ContentValueMapper()
-		.addString(Tasks.ACCOUNT_TYPE, Tasks.ACCOUNT_NAME, Tasks.TITLE, Tasks.LOCATION, Tasks.DESCRIPTION, Tasks.GEO, Tasks.URL, Tasks.TZ, Tasks.DURATION,
-			Tasks.LIST_NAME)
-		.addInteger(Tasks.PRIORITY, Tasks.LIST_COLOR, Tasks.TASK_COLOR, Tasks.STATUS, Tasks.CLASSIFICATION, Tasks.PERCENT_COMPLETE, Tasks.IS_ALLDAY)
-		.addLong(Tasks.LIST_ID, Tasks.DTSTART, Tasks.DUE, Tasks.COMPLETED, Tasks._ID);
+	private static final ContentValueMapper CONTENT_VALUE_MAPPER = EditTaskFragment.CONTENT_VALUE_MAPPER;
 
 	/**
 	 * The {@link Uri} of the current task in the view.
 	 */
+	@Parameter(key = ARG_URI)
+	@Retain
 	private Uri mTaskUri;
 
 	/**
 	 * The values of the current task.
 	 */
+	@Retain
 	private ContentSet mContentSet;
 
 	/**
@@ -103,10 +130,34 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 	 */
 	private TaskView mDetailView;
 
+	private View mColorBar;
+	private int mListColor;
+	private View mActionButton;
+	private ListenableScrollView mRootView;
+	private int mOldStatus = -1;
+	private boolean mRestored;
+
+	/**
+	 * The current action that's assigned to the floating action button.
+	 */
+	private int mActionButtonAction = ACTION_COMPLETE;
+
 	/**
 	 * A {@link Callback} to the activity.
 	 */
 	private Callback mCallback;
+
+	/**
+	 * A Runnable that updates the view.
+	 */
+	private Runnable mUpdateViewRunnable = new Runnable()
+	{
+		@Override
+		public void run()
+		{
+			updateView();
+		}
+	};
 
 	public interface Callback
 	{
@@ -115,8 +166,10 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 		 * 
 		 * @param taskUri
 		 *            The {@link Uri} of the task to edit.
+		 * @param data
+		 *            The task data that belongs to the {@link Uri}. This is purely an optimization and may be <code>null</code>.
 		 */
-		public void onEditTask(Uri taskUri);
+		public void onEditTask(Uri taskUri, ContentSet data);
 
 
 		/**
@@ -126,6 +179,28 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 		 *            The {@link Uri} of the deleted task. Note that the Uri is likely to be invalid at the time of calling this method.
 		 */
 		public void onDelete(Uri taskUri);
+
+
+		/**
+		 * Notifies the listener about the list color of the current task.
+		 * 
+		 * @param color
+		 *            The color.
+		 */
+		public void updateColor(int color);
+	}
+
+
+	public static ViewTaskFragment newInstance(Uri uri)
+	{
+		ViewTaskFragment result = new ViewTaskFragment();
+		if (uri != null)
+		{
+			Bundle args = new Bundle();
+			args.putParcelable(ARG_URI, uri);
+			result.setArguments(args);
+		}
+		return result;
 	}
 
 
@@ -165,9 +240,10 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 	public void onDestroyView()
 	{
 		super.onDestroyView();
-		if (mContent != null)
+		// remove listener
+		if (mContentSet != null)
 		{
-			mContent.removeAllViews();
+			mContentSet.removeOnChangeListener(this, null);
 		}
 
 		if (mTaskUri != null)
@@ -175,44 +251,93 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 			mAppContext.getContentResolver().unregisterContentObserver(mObserver);
 		}
 
+		if (mContent != null)
+		{
+			mContent.removeAllViews();
+		}
+
 		if (mDetailView != null)
 		{
 			// remove values, to ensure all listeners get released
 			mDetailView.setValues(null);
 		}
+
 	}
 
 
 	@Override
 	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState)
 	{
-		View rootView = inflater.inflate(R.layout.fragment_task_view_detail, container, false);
+		ListenableScrollView rootView = mRootView = (ListenableScrollView) inflater.inflate(R.layout.fragment_task_view_detail, container, false);
 		mContent = (ViewGroup) rootView.findViewById(R.id.content);
+		mColorBar = rootView.findViewById(R.id.headercolorbar);
+
+		mRestored = savedInstanceState != null;
 
 		if (savedInstanceState != null)
 		{
-			// We have an incoming state, so load the ContentSet and the task Uri from the saved state.
-			mContentSet = savedInstanceState.getParcelable(STATE_VALUES);
-			mTaskUri = savedInstanceState.getParcelable(STATE_TASK_URI);
-
 			if (mContent != null && mContentSet != null)
 			{
-				// register listener and observer
+				// register for content updates
 				mContentSet.addOnChangeListener(this, null, true);
+
+				// register observer
 				if (mTaskUri != null)
 				{
 					mAppContext.getContentResolver().registerContentObserver(mTaskUri, false, mObserver);
 				}
-
-				if (mContentSet.getAsString(Tasks.ACCOUNT_TYPE) != null)
-				{
-					// the content set contains a valid task, so load the model
-					new AsyncModelLoader(mAppContext, this).execute(mContentSet.getAsString(Tasks.ACCOUNT_TYPE));
-				}
 			}
+		}
+		else if (mTaskUri != null)
+		{
+			Uri uri = mTaskUri;
+			// pretend we didn't load anything yet
+			mTaskUri = null;
+			loadUri(uri);
+		}
+
+		if (VERSION.SDK_INT >= 11 && mColorBar != null)
+		{
+			updateColor(0);
+			mRootView.setOnScrollListener(new OnScrollListener()
+			{
+
+				@SuppressLint("NewApi")
+				@Override
+				public void onScroll(int oldScrollY, int newScrollY)
+				{
+					int headerHeight = ((ActionBarActivity) getActivity()).getSupportActionBar().getHeight();
+					if (newScrollY <= headerHeight || oldScrollY <= headerHeight)
+					{
+						updateColor((float) newScrollY / headerHeight);
+					}
+				}
+			});
 		}
 
 		return rootView;
+	}
+
+
+	@Override
+	public void onPause()
+	{
+		super.onPause();
+		persistTask();
+	}
+
+
+	private void persistTask()
+	{
+		Context activity = getActivity();
+		if (mContentSet != null && mContentSet.isUpdate() && activity != null)
+		{
+			if (mContentSet.updatesAnyKey(RECURRENCE_VALUES))
+			{
+				mContentSet.ensureUpdates(RECURRENCE_VALUES);
+			}
+			mContentSet.persist(activity);
+		}
 	}
 
 
@@ -234,7 +359,7 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 			 * Unregister the observer for any previously shown task first.
 			 */
 			mAppContext.getContentResolver().unregisterContentObserver(mObserver);
-
+			persistTask();
 		}
 
 		Uri oldUri = mTaskUri;
@@ -296,6 +421,59 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 				mDetailView.setValues(mContentSet);
 				mContent.addView(mDetailView);
 			}
+
+			mActionButton = mDetailView.findViewById(R.id.action_button);
+
+			if (mActionButton != null)
+			{
+				mActionButton.setOnClickListener(new View.OnClickListener()
+				{
+					@Override
+					public void onClick(View v)
+					{
+						switch (mActionButtonAction)
+						{
+							case ACTION_COMPLETE:
+							{
+								completeTask();
+								break;
+							}
+							case ACTION_EDIT:
+							{
+								mCallback.onEditTask(mTaskUri, mContentSet);
+								break;
+							}
+						}
+					}
+				});
+			}
+
+			if (mContentSet != null && TaskFieldAdapters.IS_CLOSED.get(mContentSet))
+			{
+				((ImageView) mActionButton.findViewById(android.R.id.icon)).setImageResource(R.drawable.content_edit);
+				mActionButtonAction = ACTION_EDIT;
+			}
+			else
+			{
+				mActionButtonAction = ACTION_COMPLETE;
+			}
+
+			if (mColorBar != null)
+			{
+				updateColor((float) mRootView.getScrollY() / mColorBar.getMeasuredHeight());
+			}
+		}
+	}
+
+
+	/**
+	 * Update the view. This doesn't call {@link #updateView()} right away, instead it posts it.
+	 */
+	private void postUpdateView()
+	{
+		if (mContent != null)
+		{
+			mContent.post(mUpdateViewRunnable);
 		}
 	}
 
@@ -309,18 +487,21 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 		}
 
 		// the model has been loaded, now update the view
-		mModel = model;
-		updateView();
-
-	}
-
-
-	@Override
-	public void onSaveInstanceState(Bundle outState)
-	{
-		super.onSaveInstanceState(outState);
-		outState.putParcelable(STATE_VALUES, mContentSet);
-		outState.putParcelable(STATE_TASK_URI, mTaskUri);
+		if (mModel == null || !mModel.equals(model))
+		{
+			mModel = model;
+			if (mRestored)
+			{
+				// The fragment has been restored from a saved state
+				// We need to wait until all views are ready, otherwise the new data might get lost and all widgets show their default state (and no data).
+				postUpdateView();
+			}
+			else
+			{
+				// This is the initial update. Just go ahead and update the view right away to ensure the activity comes up with a filled form.
+				updateView();
+			}
+		}
 	}
 
 
@@ -333,6 +514,22 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 		if (mTaskUri != null)
 		{
 			inflater.inflate(R.menu.view_task_fragment_menu, menu);
+
+			if (mContentSet != null)
+			{
+				Integer status = TaskFieldAdapters.STATUS.get(mContentSet);
+				if (status != null)
+				{
+					mOldStatus = status;
+				}
+				if (TaskFieldAdapters.IS_CLOSED.get(mContentSet) || status != null && status == Tasks.STATUS_COMPLETED)
+				{
+					// we disable the edit option, because the task is completed and the action button shows the edit option.
+					MenuItem item = menu.findItem(R.id.edit_task);
+					item.setEnabled(false);
+					item.setVisible(false);
+				}
+			}
 		}
 	}
 
@@ -344,7 +541,7 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 		if (itemId == R.id.edit_task)
 		{
 			// open editor for this task
-			mCallback.onEditTask(mTaskUri);
+			mCallback.onEditTask(mTaskUri, mContentSet);
 			return true;
 		}
 		else if (itemId == R.id.delete_task)
@@ -369,6 +566,11 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 				}).setMessage(R.string.confirm_delete_message).create().show();
 			return true;
 		}
+		else if (itemId == R.id.complete_task)
+		{
+			completeTask();
+			return true;
+		}
 		else
 		{
 			return super.onOptionsItemSelected(item);
@@ -376,13 +578,129 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 	}
 
 
+	/**
+	 * Completes the current task.
+	 */
+	private void completeTask()
+	{
+		TaskFieldAdapters.STATUS.set(mContentSet, Tasks.STATUS_COMPLETED);
+		persistTask();
+		Toast.makeText(mAppContext, getString(R.string.toast_task_completed, TaskFieldAdapters.TITLE.get(mContentSet)), Toast.LENGTH_SHORT).show();
+		// at present we just handle it like deletion, i.e. close the task in phone mode, do nothing in tablet mode
+		mCallback.onDelete(mTaskUri);
+	}
+
+
+	public static int darkenColor(int color)
+	{
+		float[] hsv = new float[3];
+		Color.colorToHSV(color, hsv);
+		if (hsv[2] > 0.8)
+		{
+			hsv[2] = 0.8f + (hsv[2] - 0.8f) * 0.5f;
+			color = Color.HSVToColor(hsv);
+		}
+		return color;
+	}
+
+
+	public static int darkenColor2(int color)
+	{
+		float[] hsv = new float[3];
+		Color.colorToHSV(color, hsv);
+		hsv[2] = hsv[2] * 0.75f;
+		color = Color.HSVToColor(hsv);
+		return color;
+	}
+
+
+	@SuppressLint("NewApi")
+	private void updateColor(float percentage)
+	{
+		if (getActivity() instanceof TaskListActivity)
+		{
+			return;
+		}
+
+		float[] hsv = new float[3];
+		Color.colorToHSV(mListColor, hsv);
+
+		if (VERSION.SDK_INT >= 11 && mColorBar != null)
+		{
+			percentage = Math.max(0, Math.min(Float.isNaN(percentage) ? 0 : percentage, 1));
+			percentage = (float) Math.pow(percentage, 1.5);
+
+			int newColor = darkenColor2(mListColor);
+
+			hsv[2] *= (0.5 + 0.25 * percentage);
+
+			ActionBar actionBar = ((ActionBarActivity) getActivity()).getSupportActionBar();
+			actionBar.setBackgroundDrawable(new ColorDrawable((newColor & 0x00ffffff) | ((int) (percentage * 255) << 24)));
+
+			// this is a workaround to ensure the new color is applied on all devices, some devices show a transparent ActionBar if we don't do that.
+			actionBar.setDisplayShowTitleEnabled(true);
+			actionBar.setDisplayShowTitleEnabled(false);
+
+			mColorBar.setBackgroundColor(mListColor);
+
+			if (VERSION.SDK_INT >= 21)
+			{
+				Window window = getActivity().getWindow();
+				window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+				window.setStatusBarColor(newColor | 0xff000000);
+			}
+		}
+
+		if (mActionButton != null)
+		{
+			// adjust color of action button
+			if (hsv[0] > 70 && hsv[0] < 170 && hsv[2] < 0.62)
+			{
+				mActionButton.setBackgroundResource(R.drawable.bg_actionbutton_light);
+			}
+			else
+			{
+				mActionButton.setBackgroundResource(R.drawable.bg_actionbutton);
+			}
+		}
+	}
+
+
+	@SuppressLint("NewApi")
 	@Override
 	public void onContentLoaded(ContentSet contentSet)
 	{
 		if (contentSet.containsKey(Tasks.ACCOUNT_TYPE))
 		{
-			// the ContentSet has been (re-)loaded, load the model of this task
-			new AsyncModelLoader(mAppContext, this).execute(contentSet.getAsString(Tasks.ACCOUNT_TYPE));
+			mListColor = TaskFieldAdapters.LIST_COLOR.get(contentSet);
+			((Callback) getActivity()).updateColor(darkenColor2(mListColor));
+
+			if (VERSION.SDK_INT >= 11)
+			{
+				updateColor((float) mRootView.getScrollY() / ((ActionBarActivity) getActivity()).getSupportActionBar().getHeight());
+			}
+
+			Activity activity = getActivity();
+			int newStatus = TaskFieldAdapters.STATUS.get(contentSet);
+			if (VERSION.SDK_INT >= 11 && activity != null
+				&& (mOldStatus != -1 && mOldStatus != newStatus || mOldStatus == -1 && TaskFieldAdapters.IS_CLOSED.get(mContentSet)))
+			{
+				// new need to update the options menu, because the status of the task has changed
+				activity.invalidateOptionsMenu();
+
+			}
+
+			mOldStatus = newStatus;
+
+			if (mModel == null || !TextUtils.equals(mModel.getAccountType(), contentSet.getAsString(Tasks.ACCOUNT_TYPE)))
+			{
+				Sources.loadModelAsync(mAppContext, contentSet.getAsString(Tasks.ACCOUNT_TYPE), this);
+			}
+			else
+			{
+				// the model didn't change, just update the view
+				postUpdateView();
+			}
 		}
 	}
 
@@ -406,7 +724,5 @@ public class ViewTaskFragment extends Fragment implements OnModelLoadedListener,
 	@Override
 	public void onContentChanged(ContentSet contentSet)
 	{
-		// nothing to do, the widgets will handle that themselves.
 	}
-
 }

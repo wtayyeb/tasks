@@ -17,6 +17,7 @@
 package org.dmfs.tasks;
 
 import org.dmfs.provider.tasks.TaskContract;
+import org.dmfs.tasks.utils.LgBugfixActionBarActivity;
 
 import android.annotation.TargetApi;
 import android.os.Build;
@@ -32,7 +33,7 @@ import android.widget.Button;
  * 
  * @author Arjun Naik<arjun@arjunnaik.in>
  */
-public class SyncSettingsActivity extends FragmentActivity
+public class SyncSettingsActivity extends LgBugfixActionBarActivity
 {
 	private FragmentManager mManager;
 	private SettingsListFragment mCurrentFrag;
@@ -98,7 +99,7 @@ public class SyncSettingsActivity extends FragmentActivity
 	{
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB)
 		{
-			getActionBar().setDisplayHomeAsUpEnabled(true);
+			getSupportActionBar().setDisplayHomeAsUpEnabled(true);
 		}
 	}
 
@@ -108,7 +109,7 @@ public class SyncSettingsActivity extends FragmentActivity
 	{
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB)
 		{
-			getActionBar().setTitle(titleRes);
+			getSupportActionBar().setTitle(titleRes);
 		}
 	}
 

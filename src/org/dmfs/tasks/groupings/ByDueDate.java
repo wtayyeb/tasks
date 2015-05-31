@@ -17,17 +17,14 @@
 
 package org.dmfs.tasks.groupings;
 
-import java.text.DateFormat;
 import java.text.DateFormatSymbols;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.TimeZone;
 
 import org.dmfs.provider.tasks.TaskContract.Instances;
 import org.dmfs.tasks.R;
 import org.dmfs.tasks.groupings.cursorloaders.TimeRangeCursorFactory;
 import org.dmfs.tasks.groupings.cursorloaders.TimeRangeCursorLoaderFactory;
 import org.dmfs.tasks.groupings.cursorloaders.TimeRangeShortCursorFactory;
+import org.dmfs.tasks.model.TaskFieldAdapters;
 import org.dmfs.tasks.utils.ExpandableChildDescriptor;
 import org.dmfs.tasks.utils.ExpandableGroupDescriptor;
 import org.dmfs.tasks.utils.ExpandableGroupDescriptorAdapter;
@@ -39,10 +36,9 @@ import android.content.res.Resources;
 import android.database.Cursor;
 import android.graphics.Paint;
 import android.os.Build;
-import android.text.format.Time;
+import android.os.Build.VERSION;
 import android.view.View;
 import android.widget.BaseExpandableListAdapter;
-import android.widget.FrameLayout.LayoutParams;
 import android.widget.TextView;
 
 
@@ -65,27 +61,14 @@ import android.widget.TextView;
  * @author Marten Gajda <marten@dmfs.org>
  * @author Tobias Reinsch <tobias@dmfs.org>
  */
-public interface ByDueDate
+public class ByDueDate extends AbstractGroupingFactory
 {
+
 	/**
 	 * A {@link ViewDescriptor} that knows how to present the tasks in the task list.
 	 */
-	public final ViewDescriptor TASK_VIEW_DESCRIPTOR = new ViewDescriptor()
+	public final ViewDescriptor TASK_VIEW_DESCRIPTOR = new BaseTaskViewDescriptor()
 	{
-		/**
-		 * We use this to get the current time.
-		 */
-		private Time mNow;
-
-		/**
-		 * The formatter we use for due dates other than today.
-		 */
-		private final DateFormat mDateFormatter = DateFormat.getDateInstance(SimpleDateFormat.MEDIUM);
-
-		/**
-		 * The formatter we use for tasks that are due today.
-		 */
-		private final DateFormat mTimeFormatter = SimpleDateFormat.getTimeInstance(SimpleDateFormat.SHORT);
 
 		private int mFlingContentViewId = R.id.flingContentView;
 		private int mFlingRevealLeftViewId = R.id.fling_reveal_left;
@@ -96,27 +79,10 @@ public interface ByDueDate
 		@Override
 		public void populateView(View view, Cursor cursor, BaseExpandableListAdapter adapter, int flags)
 		{
-			TextView title = (TextView) view.findViewById(android.R.id.title);
+			TextView title = getView(view, android.R.id.title);
 			boolean isClosed = cursor.getInt(13) > 0;
 
-			// get the view inside that was flinged if the view has an integrated fling content view
-			View flingContentView = (View) view.findViewById(mFlingContentViewId);
-			if (flingContentView == null)
-			{
-				flingContentView = view;
-			}
-
-			if (android.os.Build.VERSION.SDK_INT >= 14)
-			{
-				flingContentView.setTranslationX(0);
-				flingContentView.setAlpha(1);
-			}
-			else
-			{
-				LayoutParams layoutParams = (LayoutParams) flingContentView.getLayoutParams();
-				layoutParams.setMargins(0, layoutParams.topMargin, 0, layoutParams.bottomMargin);
-				flingContentView.setLayoutParams(layoutParams);
-			}
+			resetFlingView(view);
 
 			if (title != null)
 			{
@@ -131,53 +97,18 @@ public interface ByDueDate
 					title.setPaintFlags(title.getPaintFlags() & ~Paint.STRIKE_THRU_TEXT_FLAG);
 				}
 			}
-			TextView dueDateField = (TextView) view.findViewById(R.id.task_due_date);
-			if (dueDateField != null)
-			{
-				Time dueDate = Common.DUE_ADAPTER.get(cursor);
 
-				if (dueDate != null)
-				{
-					if (mNow == null)
-					{
-						mNow = new Time();
-					}
-					mNow.clear(TimeZone.getDefault().getID());
-					mNow.setToNow();
+			setDueDate((TextView) getView(view, R.id.task_due_date), null, INSTANCE_DUE_ADAPTER.get(cursor), isClosed);
 
-					dueDateField.setText(makeDueDate(dueDate));
-
-					// highlight overdue dates & times
-					if (dueDate.before(mNow) && !isClosed)
-					{
-						dueDateField.setTextAppearance(view.getContext(), R.style.task_list_overdue_text);
-					}
-					else
-					{
-						dueDateField.setTextAppearance(view.getContext(), R.style.task_list_due_text);
-					}
-				}
-				else
-				{
-					dueDateField.setText("");
-				}
-			}
-
-			View colorbar = view.findViewById(R.id.colorbar);
-			if (colorbar != null)
-			{
-				colorbar.setBackgroundColor(cursor.getInt(6));
-			}
-
-			View divider = view.findViewById(R.id.divider);
+			View divider = getView(view, R.id.divider);
 			if (divider != null)
 			{
 				divider.setVisibility((flags & FLAG_IS_LAST_CHILD) != 0 ? View.GONE : View.VISIBLE);
 			}
 
 			// display priority
-			int priority = cursor.getInt(cursor.getColumnIndex(Instances.PRIORITY));
-			View priorityView = view.findViewById(R.id.task_priority_view_medium);
+			int priority = TaskFieldAdapters.PRIORITY.get(cursor);
+			View priorityView = getView(view, R.id.task_priority_view_medium);
 			priorityView.setBackgroundResource(android.R.color.transparent);
 			priorityView.setVisibility(View.VISIBLE);
 
@@ -193,6 +124,27 @@ public interface ByDueDate
 			{
 				priorityView.setBackgroundResource(R.color.priority_green);
 			}
+			if (VERSION.SDK_INT >= 11)
+			{
+				// update percentage background
+				View background = getView(view, R.id.percentage_background_view);
+				background.setPivotX(0);
+				Integer percentComplete = TaskFieldAdapters.PERCENT_COMPLETE.get(cursor);
+				if (percentComplete < 100)
+				{
+					background.setScaleX(percentComplete == null ? 0 : percentComplete / 100f);
+					background.setBackgroundResource(R.drawable.task_progress_background_shade);
+				}
+				else
+				{
+					background.setScaleX(1);
+					background.setBackgroundResource(R.drawable.complete_task_background_overlay);
+				}
+			}
+
+			setColorBar(view, cursor);
+			setDescription(view, cursor);
+			setOverlay(view, cursor.getPosition(), cursor.getCount());
 		}
 
 
@@ -200,31 +152,6 @@ public interface ByDueDate
 		public int getView()
 		{
 			return R.layout.task_list_element;
-		}
-
-
-		/**
-		 * Get the due date to show. It returns just a time for tasks that are due today and a date otherwise.
-		 * 
-		 * @param due
-		 *            The due date to format.
-		 * @return A String with the formatted date.
-		 */
-		private String makeDueDate(Time due)
-		{
-			if (!due.allDay)
-			{
-				due.switchTimezone(TimeZone.getDefault().getID());
-			}
-
-			if (due.year == mNow.year && due.yearDay == mNow.yearDay)
-			{
-				return mTimeFormatter.format(new Date(due.toMillis(false)));
-			}
-			else
-			{
-				return mDateFormatter.format(new Date(due.toMillis(false)));
-			}
 		}
 
 
@@ -373,17 +300,36 @@ public interface ByDueDate
 
 	};
 
-	/**
-	 * A descriptor that knows how to load elements in a due date group.
-	 */
-	public final static ExpandableChildDescriptor DUE_DESCRIPTOR = new ExpandableChildDescriptor(Instances.CONTENT_URI, Common.INSTANCE_PROJECTION,
-		Instances.VISIBLE + "=1 and (((" + Instances.INSTANCE_DUE + ">=?) and (" + Instances.INSTANCE_DUE + "<?)) or ((" + Instances.INSTANCE_DUE + ">=? or "
-			+ Instances.INSTANCE_DUE + " is ?) and ? is null))", Instances.DEFAULT_SORT_ORDER, 0, 1, 0, 1, 1).setViewDescriptor(TASK_VIEW_DESCRIPTOR);
 
-	/**
-	 * A descriptor for the "grouped by due date" view.
-	 */
-	public final static ExpandableGroupDescriptor GROUP_DESCRIPTOR = new ExpandableGroupDescriptor(new TimeRangeCursorLoaderFactory(
-		TimeRangeShortCursorFactory.DEFAULT_PROJECTION), DUE_DESCRIPTOR).setViewDescriptor(GROUP_VIEW_DESCRIPTOR).setTitle(R.string.task_group_due_title);
+	public ByDueDate(String authority)
+	{
+		super(authority);
+	}
+
+
+	@Override
+	ExpandableChildDescriptor makeExpandableChildDescriptor(String authority)
+	{
+		return new ExpandableChildDescriptor(Instances.getContentUri(authority), INSTANCE_PROJECTION, Instances.VISIBLE + "=1 and (" + Instances.IS_ALLDAY
+			+ "=0 and (((" + Instances.INSTANCE_DUE + ">=?) and (" + Instances.INSTANCE_DUE + "<?)) or ((" + Instances.INSTANCE_DUE + ">=? or "
+			+ Instances.INSTANCE_DUE + " is ?) and ? is null))" + "or " + Instances.IS_ALLDAY + "=1 and (((" + Instances.INSTANCE_DUE + ">=?+?) and ("
+			+ Instances.INSTANCE_DUE + "<?+?)) or ((" + Instances.INSTANCE_DUE + ">=?+? or " + Instances.INSTANCE_DUE + " is ?) and ? is null)))",
+			Instances.DEFAULT_SORT_ORDER, 0, 1, 0, 1, 1, 0, 9, 1, 10, 0, 9, 1, 1).setViewDescriptor(TASK_VIEW_DESCRIPTOR);
+	}
+
+
+	@Override
+	ExpandableGroupDescriptor makeExpandableGroupDescriptor(String authority)
+	{
+		return new ExpandableGroupDescriptor(new TimeRangeCursorLoaderFactory(TimeRangeShortCursorFactory.DEFAULT_PROJECTION),
+			makeExpandableChildDescriptor(authority)).setViewDescriptor(GROUP_VIEW_DESCRIPTOR);
+	}
+
+
+	@Override
+	public int getId()
+	{
+		return R.id.task_group_by_due;
+	}
 
 }

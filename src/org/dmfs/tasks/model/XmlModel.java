@@ -19,12 +19,23 @@ package org.dmfs.tasks.model;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Map.Entry;
 
 import org.dmfs.provider.tasks.TaskContract.Tasks;
 import org.dmfs.tasks.R;
+import org.dmfs.tasks.model.adapters.BooleanFieldAdapter;
 import org.dmfs.tasks.model.adapters.FieldAdapter;
 import org.dmfs.tasks.model.adapters.StringFieldAdapter;
+import org.dmfs.tasks.model.contraints.UpdateAllDay;
 import org.dmfs.tasks.model.layout.LayoutDescriptor;
+import org.dmfs.xmlobjects.ElementDescriptor;
+import org.dmfs.xmlobjects.QualifiedName;
+import org.dmfs.xmlobjects.builder.AbstractObjectBuilder;
+import org.dmfs.xmlobjects.pull.ParserContext;
+import org.dmfs.xmlobjects.pull.Recyclable;
+import org.dmfs.xmlobjects.pull.XmlObjectPull;
+import org.dmfs.xmlobjects.pull.XmlObjectPullParserException;
+import org.dmfs.xmlobjects.pull.XmlPath;
 
 import android.content.Context;
 import android.content.pm.PackageInfo;
@@ -56,13 +67,175 @@ import android.util.Log;
  */
 public class XmlModel extends Model
 {
-
 	private final static String TAG = "org.dmfs.tasks.model.XmlModel";
 
 	public final static String METADATA_TASKS = "org.dmfs.tasks.TASKS";
+
 	public final static String NAMESPACE = "org.dmfs.tasks";
 
+	public final static QualifiedName ATTR_KIND = QualifiedName.get("kind");
+
+	/**
+	 * This is a workaround for the transition from a combined description/checklist field to two separate fields.
+	 * 
+	 * TODO: remove once the new versions of CalDAV-Sync and SmoothSync are in use
+	 */
+	public final static QualifiedName ATTR_HIDECHECKLIST = QualifiedName.get("hideCheckList");
+
 	private final static Map<String, FieldInflater> FIELD_INFLATER_MAP = new HashMap<String, FieldInflater>();
+
+	/**
+	 * POJO that stores the attributes of a &lt;datakind> element.
+	 */
+	private static class DataKind implements Recyclable
+	{
+		public String datakind;
+		public int titleId = -1;
+		public int hintId = -1;
+
+		/**
+		 * This is a workaround for the transition from a combined description/checklist field to two separate fields.
+		 * 
+		 * TODO: remove once the new versions of CalDAV-Sync and SmoothSync are in use
+		 */
+		public boolean hideCheckList = false;
+
+
+		@Override
+		public void recycle()
+		{
+			datakind = null;
+			titleId = -1;
+			hintId = -1;
+			hideCheckList = false;
+		}
+	}
+
+	/**
+	 * POJO to store the state of the model parser.
+	 */
+	private static class ModelParserState
+	{
+		public boolean hasDue = false;
+		public boolean hasStart = false;
+		public FieldDescriptor alldayDescriptor = null;
+	}
+
+	private static final ElementDescriptor<XmlModel> XML_MODEL_DESCRIPTOR = ElementDescriptor.register(QualifiedName.get(NAMESPACE, "TaskSource"),
+		new AbstractObjectBuilder<XmlModel>()
+		{
+			public XmlModel get(ElementDescriptor<XmlModel> descriptor, XmlModel recycle, ParserContext context) throws XmlObjectPullParserException
+			{
+				// ensure we have a state object
+				context.setState(new ModelParserState());
+
+				if (recycle == null)
+				{
+					throw new IllegalArgumentException("you must provide the XML model to populate as the object to recycle");
+				}
+				return recycle;
+			};
+
+
+			public XmlModel update(ElementDescriptor<XmlModel> descriptor, XmlModel object, QualifiedName attribute, String value, ParserContext context)
+				throws XmlObjectPullParserException
+			{
+				// for now we ignore all attributes
+				return object;
+			};
+
+
+			@SuppressWarnings("unchecked")
+			public <V extends Object> XmlModel update(ElementDescriptor<XmlModel> descriptor, XmlModel object, ElementDescriptor<V> childDescriptor, V child,
+				ParserContext context) throws XmlObjectPullParserException
+			{
+				if (childDescriptor == XML_DATAKIND)
+				{
+					DataKind datakind = (DataKind) child;
+					FieldInflater inflater = FIELD_INFLATER_MAP.get(datakind.datakind);
+
+					if (inflater != null)
+					{
+						FieldDescriptor fieldDescriptor = inflater.inflate(object.mContext, object.mModelContext, datakind);
+						object.addField(fieldDescriptor);
+
+						ModelParserState state = (ModelParserState) context.getState();
+
+						if ("allday".equals(datakind.datakind))
+						{
+							state.alldayDescriptor = fieldDescriptor;
+						}
+						else if ("due".equals(datakind.datakind))
+						{
+							state.hasDue = true;
+						}
+						else if ("dtstart".equals(datakind.datakind))
+						{
+							state.hasStart = true;
+						}
+						else if ("description".equals(datakind.datakind) && !datakind.hideCheckList)
+						{
+							Log.i(TAG, "found old description data kind, adding checklist");
+							object.addField(FIELD_INFLATER_MAP.get("checklist").inflate(object.mContext, object.mModelContext, datakind));
+						}
+					}
+					// we don't need the datakind object anymore, so recycle it
+					context.recycle((ElementDescriptor<DataKind>) childDescriptor, datakind);
+
+				}
+				return object;
+			};
+
+
+			@SuppressWarnings("unchecked")
+			public XmlModel finish(ElementDescriptor<XmlModel> descriptor, XmlModel object, ParserContext context) throws XmlObjectPullParserException
+			{
+				ModelParserState state = (ModelParserState) context.getState();
+				if (state.alldayDescriptor != null)
+				{
+					// add UpdateAllDay constraint of due or start fields are missing to keep the values in sync with the allday flag
+					if (!state.hasDue)
+					{
+						((FieldAdapter<Boolean>) state.alldayDescriptor.getFieldAdapter()).addContraint(new UpdateAllDay(TaskFieldAdapters.DUE));
+					}
+					if (!state.hasStart)
+					{
+						((FieldAdapter<Boolean>) state.alldayDescriptor.getFieldAdapter()).addContraint(new UpdateAllDay(TaskFieldAdapters.DTSTART));
+					}
+				}
+				return object;
+			};
+		});
+
+	private final static ElementDescriptor<DataKind> XML_DATAKIND = ElementDescriptor.register(QualifiedName.get(NAMESPACE, "datakind"),
+		new AbstractObjectBuilder<DataKind>()
+		{
+			public DataKind get(ElementDescriptor<DataKind> descriptor, DataKind recycle, ParserContext context) throws XmlObjectPullParserException
+			{
+				if (recycle != null)
+				{
+					recycle.recycle();
+					return recycle;
+				}
+
+				return new DataKind();
+			};
+
+
+			public DataKind update(ElementDescriptor<DataKind> descriptor, DataKind object, QualifiedName attribute, String value, ParserContext context)
+				throws XmlObjectPullParserException
+			{
+				if (attribute == ATTR_KIND)
+				{
+					object.datakind = value;
+				}
+				else if (attribute == ATTR_HIDECHECKLIST)
+				{
+					object.hideCheckList = Boolean.parseBoolean(value);
+				}
+				return object;
+			};
+		});
 
 	private final PackageManager mPackageManager;
 	private final String mPackageName;
@@ -106,65 +279,24 @@ public class XmlModel extends Model
 		try
 		{
 			// add a field for the list
-			mFields.add(new FieldDescriptor(mContext, R.string.task_list, null, new StringFieldAdapter(Tasks.LIST_NAME)).setViewLayout(new LayoutDescriptor(
-				R.layout.text_field_view_nodivider_large).setOption(LayoutDescriptor.OPTION_NO_TITLE, true).setOption(
-				LayoutDescriptor.OPTION_USE_TASK_LIST_BACKGROUND_COLOR, true)));
-			mFields.add(new FieldDescriptor(mContext, R.string.task_list, null, new StringFieldAdapter(Tasks.ACCOUNT_NAME)).setViewLayout(new LayoutDescriptor(
-				R.layout.text_field_view_nodivider_small).setOption(LayoutDescriptor.OPTION_NO_TITLE, true).setOption(
-				LayoutDescriptor.OPTION_USE_TASK_LIST_BACKGROUND_COLOR, true)));
+			addField(new FieldDescriptor(mContext, R.id.task_field_list_color, R.string.task_list, null, TaskFieldAdapters.LIST_COLOR)
+				.setViewLayout(DefaultModel.LIST_COLOR_VIEW).setEditorLayout(DefaultModel.LIST_COLOR_VIEW).setNoAutoAdd(true));
+			addField(new FieldDescriptor(mContext, R.id.task_field_list_name, R.string.task_list, null, new StringFieldAdapter(Tasks.LIST_NAME)).setViewLayout(
+				new LayoutDescriptor(R.layout.text_field_view_nodivider_large).setOption(LayoutDescriptor.OPTION_NO_TITLE, true)).setNoAutoAdd(true));
+			addField(new FieldDescriptor(mContext, R.id.task_field_account_name, R.string.task_list, null, new StringFieldAdapter(Tasks.ACCOUNT_NAME))
+				.setViewLayout(new LayoutDescriptor(R.layout.text_field_view_nodivider_small).setOption(LayoutDescriptor.OPTION_NO_TITLE, true)).setNoAutoAdd(
+					true));
 
-			int eventType;
-
-			// find first tag
-			do
-			{
-				eventType = parser.next();
-			} while (eventType != XmlResourceParser.END_DOCUMENT && eventType != XmlResourceParser.START_TAG);
-
-			if (!"TaskSource".equals(parser.getName()) || !NAMESPACE.equals(parser.getNamespace()))
+			XmlObjectPull pullParser = new XmlObjectPull(parser);
+			if (pullParser.pull(XML_MODEL_DESCRIPTOR, this, new XmlPath()) == null)
 			{
 				throw new ModelInflaterException("Invalid model definition in " + mPackageName + ": root node must be 'TaskSource'");
 			}
 
-			setAllowRecurrence(parser.getAttributeBooleanValue(null, "allowRecurrence", false));
-			setAllowExceptions(parser.getAttributeBooleanValue(null, "allowExceptions", false));
+			// task list name
+			addField(new FieldDescriptor(mContext, R.id.task_field_list_and_account_name, R.string.task_list, null, TaskFieldAdapters.LIST_AND_ACCOUNT_NAME)
+				.setViewLayout(DefaultModel.TEXT_VIEW_NO_LINKS).setIcon(R.drawable.ic_detail_list));
 
-			if (parser.getAttributeIntValue(null, "iconId", -1) != -1)
-			{
-				setIconId(parser.getAttributeIntValue(null, "iconId", -1));
-			}
-			if (parser.getAttributeIntValue(null, "labelId", -1) != -1)
-			{
-				setLabelId(parser.getAttributeIntValue(null, "labelId", -1));
-			}
-
-			int depth = 1;
-
-			eventType = parser.next();
-			while (eventType != XmlResourceParser.END_DOCUMENT)
-			{
-				if (eventType == XmlResourceParser.START_TAG)
-				{
-					depth++;
-					Log.v(TAG, "'" + parser.getName() + "'   " + depth);
-					if (depth == 2 && "datakind".equals(parser.getName()) && NAMESPACE.equals(parser.getNamespace()))
-					{
-						// TODO: let inflateField step forward till the end tag
-						FieldDescriptor descriptor = inflateField(parser);
-						mFields.add(descriptor);
-					}
-				}
-				else if (eventType == XmlResourceParser.END_TAG)
-				{
-					depth--;
-				}
-				else
-				{
-					throw new ModelInflaterException("Invalid tag " + parser.getName() + " " + mPackageName);
-				}
-
-				eventType = parser.next();
-			}
 		}
 		catch (Exception e)
 		{
@@ -198,29 +330,8 @@ public class XmlModel extends Model
 		return null;
 	}
 
-
 	/**
-	 * Inflate the current field.
-	 * 
-	 * @param parser
-	 *            A parser that points to a datakind.
-	 * @return A {@link FieldDescriptor} for the field.
-	 * @throws IllegalDataKindException
-	 */
-	private FieldDescriptor inflateField(XmlResourceParser parser) throws IllegalDataKindException
-	{
-		String kind = parser.getAttributeValue(null, "kind");
-		Log.v(TAG, "inflating kind " + kind);
-		FieldInflater inflater = FIELD_INFLATER_MAP.get(kind);
-		if (inflater == null)
-		{
-			throw new IllegalDataKindException("invalid data kind " + kind);
-		}
-		return inflater.inflate(mContext, mModelContext, parser);
-	}
-
-	/**
-	 * Basic field inflater. It does some default inflating.
+	 * Basic field inflater. It does some default inflating, but also allows customization.
 	 * 
 	 * @author Marten Gajda <marten@dmfs.org>
 	 */
@@ -230,54 +341,83 @@ public class XmlModel extends Model
 		private final int mFieldTitle;
 		private final int mDetailsLayout;
 		private final int mEditLayout;
+		private final int mIconId;
+		private final int mFieldId;
+		private Map<String, Object> mDetailsLayoutOptions;
+		private Map<String, Object> mEditLayoutOptions;
 
 
-		public FieldInflater(FieldAdapter<?> adapter, int fieldTitle, int detailsLayout, int editLayout)
+		public FieldInflater(FieldAdapter<?> adapter, int fieldId, int fieldTitle, int detailsLayout, int editLayout, int iconId)
 		{
 			mAdapter = adapter;
 			mFieldTitle = fieldTitle;
 			mDetailsLayout = detailsLayout;
 			mEditLayout = editLayout;
+			mIconId = iconId;
+			mFieldId = fieldId;
 		}
 
 
-		public FieldDescriptor inflate(Context context, Context modelContext, XmlResourceParser parser)
+		public FieldDescriptor inflate(Context context, Context modelContext, DataKind kind)
 		{
-			int titleId = parser.getAttributeResourceValue(null, "title_id", -1);
+			int titleId = kind.titleId;
 			FieldDescriptor descriptor;
 			if (titleId != -1)
 			{
-				descriptor = new FieldDescriptor(modelContext, titleId, getContentType(), getFieldAdapter());
+				descriptor = new FieldDescriptor(modelContext, mFieldId, titleId, getContentType(), getFieldAdapter(kind));
 			}
 			else
 			{
-				descriptor = new FieldDescriptor(context, getDefaultTitleId(), getContentType(), getFieldAdapter());
+				descriptor = new FieldDescriptor(context, mFieldId, getDefaultTitleId(), getContentType(), getFieldAdapter(kind));
 			}
-			customizeDescriptor(context, modelContext, descriptor, parser);
+
+			if (mIconId != 0)
+			{
+				descriptor.setIcon(mIconId);
+			}
+
+			customizeDescriptor(context, modelContext, descriptor, kind);
 			return descriptor;
 		}
 
 
-		public FieldAdapter<?> getFieldAdapter()
+		public FieldAdapter<?> getFieldAdapter(DataKind kind)
 		{
 			return mAdapter;
 		}
 
 
-		void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, XmlResourceParser parser)
+		void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, DataKind kind)
 		{
-			int hintId = parser.getAttributeResourceValue(null, "hint_id", -1);
+			int hintId = kind.hintId;
 			if (hintId != -1)
 			{
 				descriptor.setHint(modelContext.getString(hintId));
 			}
 			if (mDetailsLayout != -1)
 			{
-				descriptor.setViewLayout(new LayoutDescriptor(mDetailsLayout));
+				LayoutDescriptor ld = new LayoutDescriptor(mDetailsLayout);
+				if (mDetailsLayoutOptions != null)
+				{
+					for (Entry<String, Object> entry : mDetailsLayoutOptions.entrySet())
+					{
+						ld.setOption(entry.getKey(), entry.getValue());
+					}
+				}
+				descriptor.setViewLayout(ld);
+
 			}
 			if (mEditLayout != -1)
 			{
-				descriptor.setEditorLayout(new LayoutDescriptor(mEditLayout));
+				LayoutDescriptor ld = new LayoutDescriptor(mEditLayout);
+				if (mEditLayoutOptions != null)
+				{
+					for (Entry<String, Object> entry : mEditLayoutOptions.entrySet())
+					{
+						ld.setOption(entry.getKey(), entry.getValue());
+					}
+				}
+				descriptor.setEditorLayout(ld);
 			}
 		}
 
@@ -292,6 +432,52 @@ public class XmlModel extends Model
 		{
 			return mFieldTitle;
 		}
+
+
+		public FieldInflater addDetailsLayoutOption(String key, boolean value)
+		{
+			if (mDetailsLayoutOptions == null)
+			{
+				mDetailsLayoutOptions = new HashMap<String, Object>(4);
+			}
+			mDetailsLayoutOptions.put(key, value);
+			return this;
+		}
+
+
+		@SuppressWarnings("unused")
+		public FieldInflater addEditLayoutOption(String key, boolean value)
+		{
+			if (mEditLayoutOptions == null)
+			{
+				mEditLayoutOptions = new HashMap<String, Object>(4);
+			}
+			mEditLayoutOptions.put(key, value);
+			return this;
+		}
+
+
+		public FieldInflater addDetailsLayoutOption(String key, int value)
+		{
+			if (mDetailsLayoutOptions == null)
+			{
+				mDetailsLayoutOptions = new HashMap<String, Object>(4);
+			}
+			mDetailsLayoutOptions.put(key, value);
+			return this;
+		}
+
+
+		@SuppressWarnings("unused")
+		public FieldInflater addEditLayoutOption(String key, int value)
+		{
+			if (mEditLayoutOptions == null)
+			{
+				mEditLayoutOptions = new HashMap<String, Object>(4);
+			}
+			mEditLayoutOptions.put(key, value);
+			return this;
+		}
 	}
 
 	static
@@ -300,27 +486,31 @@ public class XmlModel extends Model
 		 * Add definitions for all supported fields:
 		 */
 
-		FIELD_INFLATER_MAP.put("title", new FieldInflater(TaskFieldAdapters.TITLE, R.string.task_title, R.layout.text_field_view, R.layout.text_field_editor));
-		FIELD_INFLATER_MAP.put("location", new FieldInflater(TaskFieldAdapters.LOCATION, R.string.task_location, R.layout.text_field_view,
-			R.layout.text_field_editor));
-		FIELD_INFLATER_MAP.put("description", new FieldInflater(TaskFieldAdapters.DESCRIPTION, R.string.task_description, R.layout.text_field_view,
-			R.layout.text_field_editor));
+		FIELD_INFLATER_MAP.put("title", new FieldInflater(TaskFieldAdapters.TITLE, R.id.task_field_title, R.string.task_title, R.layout.text_field_view,
+			R.layout.text_field_editor, R.drawable.ic_detail_description).addEditLayoutOption(LayoutDescriptor.OPTION_MULTILINE, false));
+		FIELD_INFLATER_MAP.put("location", new FieldInflater(TaskFieldAdapters.LOCATION, R.id.task_field_location, R.string.task_location,
+			R.layout.text_field_view, R.layout.text_field_editor, R.drawable.ic_detail_location).addDetailsLayoutOption(LayoutDescriptor.OPTION_LINKIFY, 0));
+		FIELD_INFLATER_MAP.put("description", new FieldInflater(TaskFieldAdapters.DESCRIPTION, R.id.task_field_description, R.string.task_description,
+			R.layout.text_field_view, R.layout.text_field_editor, R.drawable.ic_detail_description));
+		FIELD_INFLATER_MAP.put("checklist", new FieldInflater(TaskFieldAdapters.CHECKLIST, R.id.task_field_checklist, R.string.task_checklist,
+			R.layout.checklist_field_view, R.layout.checklist_field_editor, R.drawable.ic_detail_checklist));
 
-		FIELD_INFLATER_MAP.put("dtstart", new FieldInflater(TaskFieldAdapters.DTSTART, R.string.task_start, R.layout.time_field_view,
-			R.layout.time_field_editor));
-		FIELD_INFLATER_MAP.put("due", new FieldInflater(TaskFieldAdapters.DUE, R.string.task_due, R.layout.time_field_view, R.layout.time_field_editor));
-		FIELD_INFLATER_MAP.put("completed", new FieldInflater(TaskFieldAdapters.COMPLETED, R.string.task_completed, R.layout.time_field_view,
-			R.layout.time_field_editor));
+		FIELD_INFLATER_MAP.put("dtstart", new FieldInflater(TaskFieldAdapters.DTSTART, R.id.task_field_dtstart, R.string.task_start, R.layout.time_field_view,
+			R.layout.time_field_editor, R.drawable.ic_detail_start));
+		FIELD_INFLATER_MAP.put("due", new FieldInflater(TaskFieldAdapters.DUE, R.id.task_field_due, R.string.task_due, R.layout.time_field_view,
+			R.layout.time_field_editor, R.drawable.ic_detail_due).addDetailsLayoutOption(LayoutDescriptor.OPTION_TIME_FIELD_SHOW_ADD_BUTTONS, true));
+		FIELD_INFLATER_MAP.put("completed", new FieldInflater(TaskFieldAdapters.COMPLETED, R.id.task_field_completed, R.string.task_completed,
+			R.layout.time_field_view, R.layout.time_field_editor, R.drawable.ic_detail_completed));
 
-		FIELD_INFLATER_MAP.put("percent_complete", new FieldInflater(TaskFieldAdapters.PERCENT_COMPLETE, R.string.task_percent_complete,
-			R.layout.percentage_field_view, R.layout.percentage_field_editor));
-		FIELD_INFLATER_MAP.put("status", new FieldInflater(TaskFieldAdapters.STATUS, R.string.task_status, R.layout.choices_field_view,
-			R.layout.choices_field_editor)
+		FIELD_INFLATER_MAP.put("percent_complete", new FieldInflater(TaskFieldAdapters.PERCENT_COMPLETE, R.id.task_field_percent_complete,
+			R.string.task_percent_complete, R.layout.percentage_field_view, R.layout.percentage_field_editor, R.drawable.ic_detail_progress));
+		FIELD_INFLATER_MAP.put("status", new FieldInflater(TaskFieldAdapters.STATUS, R.id.task_field_status, R.string.task_status, R.layout.choices_field_view,
+			R.layout.choices_field_editor, R.drawable.ic_detail_status)
 		{
 			@Override
-			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, XmlResourceParser parser)
+			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, DataKind kind)
 			{
-				super.customizeDescriptor(context, modelContext, descriptor, parser);
+				super.customizeDescriptor(context, modelContext, descriptor, kind);
 				ArrayChoicesAdapter aca = new ArrayChoicesAdapter();
 				aca.addHiddenChoice(null, context.getString(R.string.status_needs_action), null);
 				aca.addChoice(Tasks.STATUS_NEEDS_ACTION, context.getString(R.string.status_needs_action), null);
@@ -330,13 +520,13 @@ public class XmlModel extends Model
 				descriptor.setChoices(aca);
 			}
 		});
-		FIELD_INFLATER_MAP.put("priority", new FieldInflater(TaskFieldAdapters.PRIORITY, R.string.task_priority, R.layout.choices_field_view,
-			R.layout.choices_field_editor)
+		FIELD_INFLATER_MAP.put("priority", new FieldInflater(TaskFieldAdapters.PRIORITY, R.id.task_field_priority, R.string.task_priority,
+			R.layout.choices_field_view, R.layout.choices_field_editor, R.drawable.ic_detail_priority)
 		{
 			@Override
-			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, XmlResourceParser parser)
+			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, DataKind kind)
 			{
-				super.customizeDescriptor(context, modelContext, descriptor, parser);
+				super.customizeDescriptor(context, modelContext, descriptor, kind);
 
 				ArrayChoicesAdapter aca = new ArrayChoicesAdapter();
 				aca.addChoice(null, context.getString(R.string.priority_undefined), null);
@@ -353,13 +543,13 @@ public class XmlModel extends Model
 				descriptor.setChoices(aca);
 			}
 		});
-		FIELD_INFLATER_MAP.put("classification", new FieldInflater(TaskFieldAdapters.CLASSIFICATION, R.string.task_classification, R.layout.choices_field_view,
-			R.layout.choices_field_editor)
+		FIELD_INFLATER_MAP.put("classification", new FieldInflater(TaskFieldAdapters.CLASSIFICATION, R.id.task_field_classification,
+			R.string.task_classification, R.layout.choices_field_view, R.layout.choices_field_editor, R.drawable.ic_detail_visibility)
 		{
 			@Override
-			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, XmlResourceParser parser)
+			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, DataKind kind)
 			{
-				super.customizeDescriptor(context, modelContext, descriptor, parser);
+				super.customizeDescriptor(context, modelContext, descriptor, kind);
 
 				ArrayChoicesAdapter aca = new ArrayChoicesAdapter();
 				aca.addChoice(null, context.getString(R.string.classification_not_specified), null);
@@ -370,16 +560,27 @@ public class XmlModel extends Model
 			}
 		});
 
-		FIELD_INFLATER_MAP.put("url", new FieldInflater(TaskFieldAdapters.URL, R.string.task_url, R.layout.url_field_view, R.layout.url_field_editor));
+		FIELD_INFLATER_MAP.put("url", new FieldInflater(TaskFieldAdapters.URL, R.id.task_field_url, R.string.task_url, R.layout.url_field_view,
+			R.layout.url_field_editor, R.drawable.ic_detail_url));
 
-		FIELD_INFLATER_MAP.put("allday", new FieldInflater(TaskFieldAdapters.ALLDAY, R.string.task_all_day, -1, R.layout.boolean_field_editor));
-
-		FIELD_INFLATER_MAP.put("timezone", new FieldInflater(TaskFieldAdapters.TIMEZONE, R.string.task_timezone, -1, R.layout.choices_field_editor)
+		FIELD_INFLATER_MAP.put("allday", new FieldInflater(null, R.id.task_field_all_day, R.string.task_all_day, -1, R.layout.boolean_field_editor,
+			R.drawable.ic_detail_due)
 		{
 			@Override
-			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, XmlResourceParser parser)
+			public FieldAdapter<?> getFieldAdapter(DataKind kind)
 			{
-				super.customizeDescriptor(context, modelContext, descriptor, parser);
+				// return a non-static field adapter because we modify it
+				return new BooleanFieldAdapter(Tasks.IS_ALLDAY);
+			}
+		});
+
+		FIELD_INFLATER_MAP.put("timezone", new FieldInflater(TaskFieldAdapters.TIMEZONE, R.id.task_field_timezone, R.string.task_timezone, -1,
+			R.layout.choices_field_editor, R.drawable.ic_detail_due)
+		{
+			@Override
+			void customizeDescriptor(Context context, Context modelContext, FieldDescriptor descriptor, DataKind kind)
+			{
+				super.customizeDescriptor(context, modelContext, descriptor, kind);
 				TimeZoneChoicesAdapter tzaca = new TimeZoneChoicesAdapter(context);
 				descriptor.setChoices(tzaca);
 			}

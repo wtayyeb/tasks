@@ -17,12 +17,13 @@
 
 package org.dmfs.tasks;
 
+import org.dmfs.tasks.model.ContentSet;
+import org.dmfs.tasks.utils.ActionBarActivity;
+
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.support.v4.app.Fragment;
-import android.support.v4.app.FragmentActivity;
 import android.view.MenuItem;
 
 
@@ -33,7 +34,7 @@ import android.view.MenuItem;
  * This activity is mostly just a 'shell' activity containing nothing more than a {@link ViewTaskFragment}.
  * </p>
  */
-public class ViewTaskActivity extends FragmentActivity implements ViewTaskFragment.Callback
+public class ViewTaskActivity extends ActionBarActivity implements ViewTaskFragment.Callback
 {
 
 	@SuppressLint("NewApi")
@@ -43,30 +44,43 @@ public class ViewTaskActivity extends FragmentActivity implements ViewTaskFragme
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_task_detail);
 
-		// Show the Up button in the action bar.
+		// If should be in two-pane mode, finish to return to main activity
+		if (getResources().getBoolean(R.bool.has_two_panes))
+		{
+
+			Intent taskListIntent = new Intent(this, TaskListActivity.class);
+			taskListIntent.putExtra(TaskListActivity.EXTRA_FORCE_LIST_SELECTION, getIntent()
+				.getBooleanExtra(TaskListActivity.EXTRA_FORCE_LIST_SELECTION, false));
+			taskListIntent.putExtra(TaskListActivity.EXTRA_DISPLAY_TASK, true);
+			taskListIntent.setData(getIntent().getData());
+			startActivity(taskListIntent);
+			finish();
+			return;
+		}
+
 		if (android.os.Build.VERSION.SDK_INT >= 11)
 		{
-			getActionBar().setDisplayHomeAsUpEnabled(true);
+			getSupportActionBar().setDisplayHomeAsUpEnabled(true);
 		}
 
 		if (savedInstanceState == null)
 		{
-			ViewTaskFragment fragment = new ViewTaskFragment();
+			ViewTaskFragment fragment = ViewTaskFragment.newInstance(getIntent().getData());
 			getSupportFragmentManager().beginTransaction().add(R.id.task_detail_container, fragment).commit();
 		}
 	}
 
 
-	@Override
-	public void onAttachFragment(Fragment fragment)
-	{
-		if (fragment instanceof ViewTaskFragment)
-		{
-			ViewTaskFragment detailFragment = (ViewTaskFragment) fragment;
-			detailFragment.loadUri(getIntent().getData());
-		}
-	}
-
+	// @Override
+	// public void onAttachFragment(Fragment fragment)
+	// {
+	// if (fragment instanceof ViewTaskFragment)
+	// {
+	// ViewTaskFragment detailFragment = (ViewTaskFragment) fragment;
+	// // detailFragment.loadUri(getIntent().getData());
+	// }
+	// }
+	//
 
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item)
@@ -86,10 +100,14 @@ public class ViewTaskActivity extends FragmentActivity implements ViewTaskFragme
 
 
 	@Override
-	public void onEditTask(Uri taskUri)
+	public void onEditTask(Uri taskUri, ContentSet data)
 	{
 		Intent editTaskIntent = new Intent(Intent.ACTION_EDIT);
 		editTaskIntent.setData(taskUri);
+		if (data != null)
+		{
+			editTaskIntent.putExtra(EditTaskActivity.EXTRA_DATA_CONTENT_SET, data);
+		}
 		startActivity(editTaskIntent);
 	}
 
@@ -101,6 +119,13 @@ public class ViewTaskActivity extends FragmentActivity implements ViewTaskFragme
 		 * The task we're showing has been deleted, just finish.
 		 */
 		finish();
+	}
+
+
+	@Override
+	public void updateColor(int color)
+	{
+		// nothing to do here
 	}
 
 }

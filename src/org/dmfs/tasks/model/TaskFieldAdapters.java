@@ -20,11 +20,18 @@ package org.dmfs.tasks.model;
 import org.dmfs.provider.tasks.TaskContract;
 import org.dmfs.provider.tasks.TaskContract.Tasks;
 import org.dmfs.tasks.model.adapters.BooleanFieldAdapter;
+import org.dmfs.tasks.model.adapters.ChecklistFieldAdapter;
+import org.dmfs.tasks.model.adapters.ColorFieldAdapter;
+import org.dmfs.tasks.model.adapters.DescriptionStringFieldAdapter;
+import org.dmfs.tasks.model.adapters.FloatFieldAdapter;
+import org.dmfs.tasks.model.adapters.FormattedStringFieldAdapter;
 import org.dmfs.tasks.model.adapters.IntegerFieldAdapter;
 import org.dmfs.tasks.model.adapters.StringFieldAdapter;
 import org.dmfs.tasks.model.adapters.TimeFieldAdapter;
 import org.dmfs.tasks.model.adapters.TimezoneFieldAdapter;
 import org.dmfs.tasks.model.adapters.UrlFieldAdapter;
+import org.dmfs.tasks.model.contraints.AdjustPercentComplete;
+import org.dmfs.tasks.model.contraints.ChecklistConstraint;
 import org.dmfs.tasks.model.contraints.NotAfter;
 import org.dmfs.tasks.model.contraints.NotBefore;
 
@@ -42,14 +49,15 @@ public final class TaskFieldAdapters
 	public final static BooleanFieldAdapter ALLDAY = new BooleanFieldAdapter(Tasks.IS_ALLDAY);
 
 	/**
-	 * Adapter for the status of a task.
-	 */
-	public final static IntegerFieldAdapter STATUS = new IntegerFieldAdapter(Tasks.STATUS, Tasks.STATUS_NEEDS_ACTION);
-
-	/**
 	 * Adapter for the percent complete value of a task.
 	 */
 	public final static IntegerFieldAdapter PERCENT_COMPLETE = new IntegerFieldAdapter(Tasks.PERCENT_COMPLETE);
+
+	/**
+	 * Adapter for the status of a task.
+	 */
+	public final static IntegerFieldAdapter STATUS = (IntegerFieldAdapter) new IntegerFieldAdapter(Tasks.STATUS, Tasks.STATUS_NEEDS_ACTION)
+		.addContraint(new AdjustPercentComplete(PERCENT_COMPLETE));
 
 	/**
 	 * Adapter for the priority value of a task.
@@ -84,7 +92,13 @@ public final class TaskFieldAdapters
 	/**
 	 * Adapter for the description of a task.
 	 */
-	public final static StringFieldAdapter DESCRIPTION = new StringFieldAdapter(Tasks.DESCRIPTION);
+	public final static DescriptionStringFieldAdapter DESCRIPTION = new DescriptionStringFieldAdapter(Tasks.DESCRIPTION);
+
+	/**
+	 * Adapter for the checklist of a task.
+	 */
+	public final static ChecklistFieldAdapter CHECKLIST = (ChecklistFieldAdapter) new ChecklistFieldAdapter(Tasks.DESCRIPTION)
+		.addContraint(new ChecklistConstraint(STATUS, PERCENT_COMPLETE));
 
 	/**
 	 * Private adapter for the start date of a task. We need this to reference DTSTART from DUE.
@@ -120,12 +134,27 @@ public final class TaskFieldAdapters
 	/**
 	 * Adapter for the Color of the task.
 	 * */
-	public final static IntegerFieldAdapter LIST_COLOR = new IntegerFieldAdapter(TaskContract.Tasks.LIST_COLOR);
+	public final static IntegerFieldAdapter LIST_COLOR = new ColorFieldAdapter(TaskContract.Tasks.LIST_COLOR, 0.8f);
 
 	/**
 	 * Adpater for the ID of the task.
 	 * */
 	public static final IntegerFieldAdapter TASK_ID = new IntegerFieldAdapter(TaskContract.Tasks._ID);
+
+	/**
+	 * Adapter for the IS_CLOSED flag of a task.
+	 * */
+	public static final BooleanFieldAdapter IS_CLOSED = new BooleanFieldAdapter(TaskContract.Tasks.IS_CLOSED);
+
+	/**
+	 * Adpater for the score (i.e. the relevance) of the task in a search.
+	 * */
+	public static final FloatFieldAdapter SCORE = new FloatFieldAdapter(TaskContract.Tasks.SCORE, 0f);
+
+	/**
+	 * Adatper that contains list name and account name.
+	 * */
+	public static final FormattedStringFieldAdapter LIST_AND_ACCOUNT_NAME = new FormattedStringFieldAdapter("%1$s (%2$s)", LIST_NAME, ACCOUNT_NAME);
 
 
 	/**

@@ -17,16 +17,18 @@
 
 package org.dmfs.tasks;
 
+import java.util.TimeZone;
+
 import org.dmfs.provider.tasks.TaskContract.Tasks;
 import org.dmfs.tasks.model.ContentSet;
+import org.dmfs.tasks.utils.ActionBarActivity;
 
 import android.annotation.TargetApi;
-import android.app.ActionBar;
 import android.content.Intent;
 import android.os.Bundle;
 import android.support.v4.app.Fragment;
-import android.support.v4.app.FragmentActivity;
 import android.support.v4.app.NavUtils;
+import android.support.v7.app.ActionBar;
 import android.view.Menu;
 import android.view.MenuItem;
 
@@ -38,9 +40,17 @@ import android.view.MenuItem;
  * @author Marten Gajda <marten@dmfs.org>
  * @author Tobias Reinsch <tobias@dmfs.org>
  */
-public class EditTaskActivity extends FragmentActivity
+public class EditTaskActivity extends ActionBarActivity
 {
+	private static final String ACTION_NOTE_TO_SELF = "com.google.android.gm.action.AUTO_SEND";
+
+	final static String EXTRA_DATA_CONTENT_SET = "org.dmfs.DATA";
+
+	public final static String EXTRA_DATA_ACCOUNT_TYPE = "org.dmfs.ACCOUNT_TYPE";
+
 	private EditTaskFragment mEditFragment;
+
+	private String mAuthority;
 
 
 	@TargetApi(11)
@@ -50,12 +60,15 @@ public class EditTaskActivity extends FragmentActivity
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_task_editor);
 
+		mAuthority = getString(R.string.org_dmfs_tasks_authority);
+
 		if (android.os.Build.VERSION.SDK_INT >= 11)
 		{
 			// hide up button in action bar
-			ActionBar actionBar = getActionBar();
+			ActionBar actionBar = getSupportActionBar();
 			actionBar.setDisplayShowHomeEnabled(false);
-			actionBar.setDisplayHomeAsUpEnabled(false);
+			actionBar.setDisplayHomeAsUpEnabled(true);
+			actionBar.setHomeAsUpIndicator(R.drawable.content_remove_light);
 			// actionBar.setDisplayShowTitleEnabled(false);
 		}
 
@@ -64,11 +77,15 @@ public class EditTaskActivity extends FragmentActivity
 
 			Bundle arguments = new Bundle();
 			Intent intent = getIntent();
+			String action = intent.getAction();
 
-			if (Intent.ACTION_SEND.equals(intent.getAction()))
+			setActivityTitle(action);
+
+			if (Intent.ACTION_SEND.equals(action))
 			{
+
 				// load data from incoming share intent
-				ContentSet sharedContentSet = new ContentSet(Tasks.CONTENT_URI);
+				ContentSet sharedContentSet = new ContentSet(Tasks.getContentUri(mAuthority));
 				if (intent.hasExtra(Intent.EXTRA_SUBJECT))
 				{
 					sharedContentSet.put(Tasks.TITLE, intent.getStringExtra(Intent.EXTRA_SUBJECT));
@@ -90,11 +107,47 @@ public class EditTaskActivity extends FragmentActivity
 				}
 				// hand over shared information to EditTaskFragment
 				arguments.putParcelable(EditTaskFragment.PARAM_CONTENT_SET, sharedContentSet);
+
+			}
+			else if (ACTION_NOTE_TO_SELF.equals(action))
+			{
+				// process the note to self intent
+				ContentSet sharedContentSet = new ContentSet(Tasks.getContentUri(mAuthority));
+
+				if (intent.hasExtra(Intent.EXTRA_SUBJECT))
+				{
+					sharedContentSet.put(Tasks.DESCRIPTION, intent.getStringExtra(Intent.EXTRA_SUBJECT));
+				}
+
+				if (intent.hasExtra(Intent.EXTRA_TEXT))
+				{
+					String extraText = intent.getStringExtra(Intent.EXTRA_TEXT);
+					sharedContentSet.put(Tasks.TITLE, extraText);
+
+				}
+
+				// add start time stamp
+				sharedContentSet.put(Tasks.DTSTART, System.currentTimeMillis());
+				sharedContentSet.put(Tasks.TZ, TimeZone.getDefault().getID());
+
+				// hand over shared information to EditTaskFragment
+				arguments.putParcelable(EditTaskFragment.PARAM_CONTENT_SET, sharedContentSet);
+
 			}
 			else
 			{
 				// hand over task URI for editing / creating empty task
 				arguments.putParcelable(EditTaskFragment.PARAM_TASK_URI, getIntent().getData());
+				ContentSet data = getIntent().getParcelableExtra(EXTRA_DATA_CONTENT_SET);
+				if (data != null)
+				{
+					arguments.putParcelable(EditTaskFragment.PARAM_CONTENT_SET, data);
+				}
+				String accountType = getIntent().getStringExtra(EXTRA_DATA_ACCOUNT_TYPE);
+				if (accountType != null)
+				{
+					arguments.putString(EditTaskFragment.PARAM_ACCOUNT_TYPE, accountType);
+				}
 			}
 
 			EditTaskFragment fragment = new EditTaskFragment();
@@ -151,6 +204,19 @@ public class EditTaskActivity extends FragmentActivity
 				return true;
 		}
 		return super.onOptionsItemSelected(item);
+	}
+
+
+	private void setActivityTitle(String action)
+	{
+		if (Intent.ACTION_EDIT.equals(action))
+		{
+			setTitle(R.string.activity_edit_task_title);
+		}
+		else
+		{
+			setTitle(R.string.activity_add_task_title);
+		}
 	}
 
 }

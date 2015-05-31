@@ -17,27 +17,26 @@
 
 package org.dmfs.tasks;
 
-import java.util.Arrays;
-
 import org.dmfs.android.retentionmagic.SupportFragment;
 import org.dmfs.android.retentionmagic.annotations.Parameter;
 import org.dmfs.android.retentionmagic.annotations.Retain;
 import org.dmfs.provider.tasks.TaskContract;
 import org.dmfs.provider.tasks.TaskContract.Instances;
 import org.dmfs.provider.tasks.TaskContract.Tasks;
-import org.dmfs.tasks.groupings.ByCompleted;
 import org.dmfs.tasks.groupings.ByDueDate;
 import org.dmfs.tasks.groupings.ByList;
 import org.dmfs.tasks.groupings.filters.AbstractFilter;
 import org.dmfs.tasks.groupings.filters.ConstantFilter;
 import org.dmfs.tasks.model.Model;
-import org.dmfs.tasks.utils.AsyncModelLoader;
+import org.dmfs.tasks.model.Sources;
 import org.dmfs.tasks.utils.ExpandableGroupDescriptor;
 import org.dmfs.tasks.utils.ExpandableGroupDescriptorAdapter;
 import org.dmfs.tasks.utils.FlingDetector;
 import org.dmfs.tasks.utils.FlingDetector.OnFlingListener;
 import org.dmfs.tasks.utils.OnChildLoadedListener;
 import org.dmfs.tasks.utils.OnModelLoadedListener;
+import org.dmfs.tasks.utils.RetainExpandableListView;
+import org.dmfs.tasks.utils.SearchHistoryDatabaseHelper.SearchHistoryColumns;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
@@ -54,12 +53,12 @@ import android.content.Intent;
 import android.content.res.Resources;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.support.v4.app.LoaderManager;
 import android.support.v4.content.Loader;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -87,10 +86,13 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 	OnFlingListener
 {
 
+	@SuppressWarnings("unused")
 	private static final String TAG = "org.dmfs.tasks.TaskListFragment";
 
 	private final static String ARG_INSTANCE_ID = "instance_id";
 	private final static String ARG_TWO_PANE_LAYOUT = "two_pane_layout";
+
+	private static final long INTERVAL_LISTVIEW_REDRAW = 60000;
 
 	/**
 	 * A filter to hide completed tasks.
@@ -112,8 +114,8 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 	private int mActivatedPositionGroup = ExpandableListView.INVALID_POSITION;
 	@Retain(permanent = true, instanceNSField = "mInstancePosition")
 	private int mActivatedPositionChild = ExpandableListView.INVALID_POSITION;
-	private long[] mExpandedIds = new long[0];
-	private ExpandableListView mExpandableListView;
+
+	private RetainExpandableListView mExpandableListView;
 	private Context mAppContext;
 	private ExpandableGroupDescriptorAdapter mAdapter;
 	private Handler mHandler;
@@ -129,136 +131,15 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 	private boolean mTwoPaneLayout;
 
 	private Loader<Cursor> mCursorLoader;
+	private String mAuthority;
 
-	/**
-	 * A callback interface that all activities containing this fragment must implement. This mechanism allows activities to be notified of item selections.
-	 */
-	public interface Callbacks
-	{
-		/**
-		 * Callback for when an item has been selected.
-		 */
-		public void onItemSelected(Uri taskUri, boolean forceReload);
+	private Uri mSelectedTaskUri;
 
+	/** The child position to open when the fragment is displayed. **/
+	private ListPosition mSelectedChildPosition;
 
-		public ExpandableGroupDescriptor getGroupDescriptor(int position);
-
-
-		public void onAddNewTask();
-	}
-
-
-	public static TaskListFragment newInstance(int instancePosition, boolean twoPaneLayout)
-	{
-		TaskListFragment result = new TaskListFragment();
-		Bundle args = new Bundle();
-		args.putInt(ARG_INSTANCE_ID, instancePosition);
-		args.putBoolean(ARG_TWO_PANE_LAYOUT, twoPaneLayout);
-		result.setArguments(args);
-		return result;
-	}
-
-
-	/**
-	 * Mandatory empty constructor for the fragment manager to instantiate the fragment (e.g. upon screen orientation changes).
-	 */
-	public TaskListFragment()
-	{
-	}
-
-
-	@Override
-	public void onCreate(Bundle savedInstanceState)
-	{
-		super.onCreate(savedInstanceState);
-		mHandler = new Handler();
-		setHasOptionsMenu(true);
-	}
-
-
-	@Override
-	public void onViewCreated(View view, Bundle savedInstanceState)
-	{
-		super.onViewCreated(view, savedInstanceState);
-	}
-
-
-	@Override
-	public void onSaveInstanceState(Bundle outState)
-	{
-		mSavedExpandedGroups = getExpandedGroups();
-		super.onSaveInstanceState(outState);
-	}
-
-
-	@Override
-	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState)
-	{
-		View rootView = inflater.inflate(R.layout.fragment_expandable_task_list, container, false);
-		mExpandableListView = (ExpandableListView) rootView.findViewById(android.R.id.list);
-
-		if (mGroupDescriptor == null)
-		{
-			loadGroupDescriptor();
-		}
-
-		// setup the views
-		this.updateView();
-
-		// expand lists
-		if (mSavedExpandedGroups != null)
-		{
-			setExpandedGroups();
-		}
-
-		FlingDetector swiper = new FlingDetector(mExpandableListView, mGroupDescriptor.getElementViewDescriptor().getFlingContentViewId(), getActivity()
-			.getApplicationContext());
-		swiper.setOnFlingListener(this);
-
-		if (mTwoPaneLayout)
-		{
-			setListViewScrollbarPositionLeft(true);
-			setActivateOnItemClick(true);
-		}
-
-		return rootView;
-	}
-
-
-	@Override
-	public void onAttach(Activity activity)
-	{
-		super.onAttach(activity);
-
-		mAppContext = activity.getBaseContext();
-
-		// Activities containing this fragment must implement its callbacks.
-		if (!(activity instanceof Callbacks))
-		{
-			throw new IllegalStateException("Activity must implement fragment's callbacks.");
-		}
-
-		mCallbacks = (Callbacks) activity;
-
-		// load accounts early
-		new AsyncModelLoader(activity, this).execute(TaskContract.LOCAL_ACCOUNT);
-	}
-
-
-	@Override
-	public void onDetach()
-	{
-		super.onDetach();
-
-	}
-
-
-	@Override
-	public void onPause()
-	{
-		mSavedExpandedGroups = getExpandedGroups();
-		super.onPause();
-	}
+	@Retain
+	private int mPageId = -1;
 
 	private final OnChildClickListener mTaskItemClickListener = new OnChildClickListener()
 	{
@@ -296,91 +177,187 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 		}
 	};
 
-
-	private void selectChildView(ExpandableListView expandLV, int groupPosition, int childPosition, boolean force)
+	/**
+	 * A callback interface that all activities containing this fragment must implement. This mechanism allows activities to be notified of item selections.
+	 */
+	public interface Callbacks
 	{
-		if (groupPosition < mAdapter.getGroupCount() && childPosition < mAdapter.getChildrenCount(groupPosition))
+		/**
+		 * Callback for when an item has been selected.
+		 * 
+		 * @param taskUri
+		 *            The {@link Uri} of the selected task.
+		 * @param forceReload
+		 *            Whether to reload the task or not.
+		 * @param sender
+		 *            The sender of the callback.
+		 */
+		public void onItemSelected(Uri taskUri, boolean forceReload, int pagePosition);
+
+
+		public ExpandableGroupDescriptor getGroupDescriptor(int position);
+
+
+		public void onAddNewTask();
+	}
+
+	/**
+	 * A runnable that periodically updates the list. We need that to update relative dates & times. TODO: we probably should move that to the adapter to update
+	 * only the date & times fields, not the entire list.
+	 */
+	private Runnable mListRedrawRunnable = new Runnable()
+	{
+
+		@Override
+		public void run()
 		{
-			// a task instance element has been clicked, get it's instance id and notify the activity
-			ExpandableListAdapter listAdapter = expandLV.getExpandableListAdapter();
-			Cursor cursor = (Cursor) listAdapter.getChild(groupPosition, childPosition);
-
-			if (cursor == null)
-			{
-				return;
-			}
-			// TODO: for now we get the id of the task, not the instance, once we support recurrence we'll have to change that
-			Long selectTaskId = cursor.getLong(cursor.getColumnIndex(Instances.TASK_ID));
-
-			if (selectTaskId != null)
-			{
-				// Notify the active callbacks interface (the activity, if the fragment is attached to one) that an item has been selected.
-
-				// TODO: use the instance URI one we support recurrence
-				Uri taskUri = ContentUris.withAppendedId(Tasks.CONTENT_URI, selectTaskId);
-
-				mCallbacks.onItemSelected(taskUri, force);
-			}
+			mExpandableListView.invalidateViews();
+			mHandler.postDelayed(this, INTERVAL_LISTVIEW_REDRAW);
 		}
+	};
+
+
+	public static TaskListFragment newInstance(int instancePosition, boolean twoPaneLayout)
+	{
+		TaskListFragment result = new TaskListFragment();
+		Bundle args = new Bundle();
+		args.putInt(ARG_INSTANCE_ID, instancePosition);
+		args.putBoolean(ARG_TWO_PANE_LAYOUT, twoPaneLayout);
+		result.setArguments(args);
+		return result;
 	}
 
 
 	/**
-	 * Turns on activate-on-click mode. When this mode is on, list items will be given the 'activated' state when touched.
-	 * <p>
-	 * Note: this does not work 100% with {@link ExpandableListView}, it doesn't check touched items automatically.
-	 * </p>
-	 * 
-	 * @param activateOnItemClick
-	 *            Whether to enable single choice mode or not.
+	 * Mandatory empty constructor for the fragment manager to instantiate the fragment (e.g. upon screen orientation changes).
 	 */
-	public void setActivateOnItemClick(boolean activateOnItemClick)
+	public TaskListFragment()
 	{
-		mExpandableListView.setChoiceMode(activateOnItemClick ? ListView.CHOICE_MODE_SINGLE : ListView.CHOICE_MODE_NONE);
+	}
+
+
+	@Override
+	public void onAttach(Activity activity)
+	{
+		super.onAttach(activity);
+		mAuthority = getString(R.string.org_dmfs_tasks_authority);
+
+		mAppContext = activity.getBaseContext();
+
+		// Activities containing this fragment must implement its callbacks.
+		if (!(activity instanceof Callbacks))
+		{
+			throw new IllegalStateException("Activity must implement fragment's callbacks.");
+		}
+
+		mCallbacks = (Callbacks) activity;
+
+		// load accounts early
+		Sources.loadModelAsync(activity, TaskContract.LOCAL_ACCOUNT, this);
+	}
+
+
+	@Override
+	public void onCreate(Bundle savedInstanceState)
+	{
+		super.onCreate(savedInstanceState);
+		mHandler = new Handler();
+		setHasOptionsMenu(true);
+	}
+
+
+	@Override
+	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState)
+	{
+		View rootView = inflater.inflate(R.layout.fragment_expandable_task_list, container, false);
+		mExpandableListView = (RetainExpandableListView) rootView.findViewById(android.R.id.list);
+
+		if (mGroupDescriptor == null)
+		{
+			loadGroupDescriptor();
+		}
+
+		// setup the views
+		this.prepareReload();
+
+		// expand lists
+		if (mSavedExpandedGroups != null)
+		{
+			mExpandableListView.expandGroups(mSavedExpandedGroups);
+		}
+
+		FlingDetector swiper = new FlingDetector(mExpandableListView, mGroupDescriptor.getElementViewDescriptor().getFlingContentViewId(), getActivity()
+			.getApplicationContext());
+		swiper.setOnFlingListener(this);
+
+		return rootView;
+	}
+
+
+	@Override
+	public void onViewCreated(View view, Bundle savedInstanceState)
+	{
+		super.onViewCreated(view, savedInstanceState);
+	}
+
+
+	@Override
+	public void onStart()
+	{
+		reloadCursor();
+		super.onStart();
+	}
+
+
+	@Override
+	public void onResume()
+	{
+		super.onResume();
+		mExpandableListView.invalidateViews();
+		startAutomaticRedraw();
+		openSelectedChild();
+
+		if (mTwoPaneLayout)
+		{
+			setListViewScrollbarPositionLeft(true);
+			setActivateOnItemClick(true);
+		}
+	}
+
+
+	@Override
+	public void onPause()
+	{
+		// we can't rely on save instance state being called before onPause, so we get the expanded groups here again
+		if (!((TaskListActivity) getActivity()).isInTransientState())
+		{
+			mSavedExpandedGroups = mExpandableListView.getExpandedGroups();
+		}
+		stopAutomaticRedraw();
+		super.onPause();
+	}
+
+
+	@Override
+	public void onDetach()
+	{
+		super.onDetach();
+
+	}
+
+
+	@Override
+	public void onSaveInstanceState(Bundle outState)
+	{
+		if (!((TaskListActivity) getActivity()).isInTransientState())
+		{
+			mSavedExpandedGroups = mExpandableListView.getExpandedGroups();
+		}
+		super.onSaveInstanceState(outState);
 	}
 
 
 	@TargetApi(Build.VERSION_CODES.HONEYCOMB)
-	public void setListViewScrollbarPositionLeft(boolean left)
-	{
-		if (android.os.Build.VERSION.SDK_INT >= 11)
-		{
-			if (left)
-			{
-				mExpandableListView.setVerticalScrollbarPosition(View.SCROLLBAR_POSITION_LEFT);
-				// expandLV.setScrollBarStyle(style);
-			}
-			else
-			{
-				mExpandableListView.setVerticalScrollbarPosition(View.SCROLLBAR_POSITION_RIGHT);
-			}
-		}
-	}
-
-
-	public void setExpandableGroupDescriptor(ExpandableGroupDescriptor groupDescriptor)
-	{
-		mGroupDescriptor = groupDescriptor;
-	}
-
-
-	/**
-	 * Updates the view after the group descriptor was changed
-	 * 
-	 */
-	public void updateView()
-	{
-		mAdapter = new ExpandableGroupDescriptorAdapter(getActivity(), getLoaderManager(), mGroupDescriptor);
-		mExpandableListView.setAdapter(mAdapter);
-		mExpandableListView.setOnChildClickListener((android.widget.ExpandableListView.OnChildClickListener) mTaskItemClickListener);
-		mExpandableListView.setOnGroupCollapseListener((android.widget.ExpandableListView.OnGroupCollapseListener) mTaskListCollapseListener);
-		mAdapter.setOnChildLoadedListener(this);
-		mAdapter.setChildCursorFilter(COMPLETED_FILTER);
-		restoreFilterState();
-		getLoaderManager().restartLoader(-1, null, this);
-	}
-
-
 	@Override
 	public void onCreateOptionsMenu(Menu menu, MenuInflater inflater)
 	{
@@ -450,7 +427,6 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 		if (mGroupDescriptor != null)
 		{
 			mCursorLoader = mGroupDescriptor.getGroupCursorLoader(mAppContext);
-
 		}
 		return mCursorLoader;
 
@@ -460,27 +436,31 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 	@Override
 	public void onLoadFinished(Loader<Cursor> loader, Cursor cursor)
 	{
-		/*
-		 * int scrollx = expandLV.getFirstVisiblePosition(); View itemView = expandLV.getChildAt(0); int scrolly = itemView == null ? 0 : itemView.getTop();
-		 * Log.v(TAG, "scrollY " + scrollx + "  " + scrolly);
-		 */
-		Log.v(TAG, "change cursor");
+
 		if (mSavedExpandedGroups == null)
 		{
-			mSavedExpandedGroups = getExpandedGroups();
+			mSavedExpandedGroups = mExpandableListView.getExpandedGroups();
 		}
 
-		mAdapter.changeCursor(cursor);
-		/*
-		 * expandLV.setSelectionFromTop(scrollx, 0); int scrollx2 = expandLV.getFirstVisiblePosition(); View itemView2 = expandLV.getChildAt(0); int scrolly2 =
-		 * itemView == null ? 0 : itemView2.getTop(); Log.v(TAG, "scrollY " + scrollx2 + "  " + scrolly2);
-		 */
+		mAdapter.setGroupCursor(cursor);
+
 		if (mSavedExpandedGroups != null)
 		{
-			mExpandedIds = mSavedExpandedGroups;
-			setExpandedGroups();
-			mSavedExpandedGroups = null;
+			mExpandableListView.expandGroups(mSavedExpandedGroups);
+			if (!((TaskListActivity) getActivity()).isInTransientState())
+			{
+				mSavedExpandedGroups = null;
+			}
 		}
+
+		mHandler.post(new Runnable()
+		{
+			@Override
+			public void run()
+			{
+				mAdapter.reloadLoadedGroups();
+			}
+		});
 	}
 
 
@@ -488,6 +468,83 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 	public void onLoaderReset(Loader<Cursor> loader)
 	{
 		mAdapter.changeCursor(null);
+	}
+
+
+	@Override
+	public void onChildLoaded(final int pos, Cursor childCursor)
+	{
+		if (mActivatedPositionChild != ExpandableListView.INVALID_POSITION)
+		{
+			if (pos == mActivatedPositionGroup && mActivatedPositionChild != ExpandableListView.INVALID_POSITION)
+			{
+				mHandler.post(setOpenHandler);
+			}
+		}
+		// check for child to select
+		if (mTwoPaneLayout)
+		{
+			selectChild(pos, childCursor);
+		}
+	}
+
+
+	@Override
+	public void onModelLoaded(Model model)
+	{
+		// nothing to do, we've just loaded the default model to speed up loading the detail view and the editor view.
+	}
+
+
+	private void selectChildView(ExpandableListView expandLV, int groupPosition, int childPosition, boolean force)
+	{
+		if (groupPosition < mAdapter.getGroupCount() && childPosition < mAdapter.getChildrenCount(groupPosition))
+		{
+			// a task instance element has been clicked, get it's instance id and notify the activity
+			ExpandableListAdapter listAdapter = expandLV.getExpandableListAdapter();
+			Cursor cursor = (Cursor) listAdapter.getChild(groupPosition, childPosition);
+
+			if (cursor == null)
+			{
+				return;
+			}
+			// TODO: for now we get the id of the task, not the instance, once we support recurrence we'll have to change that
+			Long selectTaskId = cursor.getLong(cursor.getColumnIndex(Instances.TASK_ID));
+
+			if (selectTaskId != null)
+			{
+				// Notify the active callbacks interface (the activity, if the fragment is attached to one) that an item has been selected.
+
+				// TODO: use the instance URI one we support recurrence
+				Uri taskUri = ContentUris.withAppendedId(Tasks.getContentUri(mAuthority), selectTaskId);
+
+				mCallbacks.onItemSelected(taskUri, force, mInstancePosition);
+			}
+		}
+	}
+
+
+	/**
+	 * prepares the update of the view after the group descriptor was changed
+	 * 
+	 * 
+	 */
+	public void prepareReload()
+	{
+		mAdapter = new ExpandableGroupDescriptorAdapter(getActivity(), getLoaderManager(), mGroupDescriptor);
+		mExpandableListView.setAdapter(mAdapter);
+		mExpandableListView.setOnChildClickListener((android.widget.ExpandableListView.OnChildClickListener) mTaskItemClickListener);
+		mExpandableListView.setOnGroupCollapseListener((android.widget.ExpandableListView.OnGroupCollapseListener) mTaskListCollapseListener);
+		mAdapter.setOnChildLoadedListener(this);
+		mAdapter.setChildCursorFilter(COMPLETED_FILTER);
+		restoreFilterState();
+
+	}
+
+
+	private void reloadCursor()
+	{
+		getLoaderManager().restartLoader(-1, null, this);
 	}
 
 
@@ -506,133 +563,6 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 	}
 
 
-	public long[] getExpandedGroups()
-	{
-		ExpandableListAdapter adapter = mExpandableListView.getExpandableListAdapter();
-		int count = adapter.getGroupCount();
-
-		long[] result = new long[count];
-
-		int idx = 0;
-		for (int i = 0; i < count; ++i)
-		{
-			if (mExpandableListView.isGroupExpanded(i))
-			{
-				result[idx] = adapter.getGroupId(i);
-				++idx;
-			}
-		}
-
-		// Arrays.copyOf not available in API level 8 and below.
-		/*
-		 * if (android.os.Build.VERSION.SDK_INT > 8) { return Arrays.copyOf(result, idx); } else
-		 */
-		{
-			long[] returnArray = new long[idx];
-			System.arraycopy(result, 0, returnArray, 0, idx);
-			return returnArray;
-		}
-	}
-
-
-	public void setExpandedGroups()
-	{
-		ExpandableListAdapter adapter = mExpandableListView.getExpandableListAdapter();
-		Arrays.sort(mExpandedIds);
-		Log.d(TAG, "NOW EXPANDING : " + adapter.getGroupCount());
-		int count = adapter.getGroupCount();
-		for (int i = 0; i < count; ++i)
-		{
-			if (Arrays.binarySearch(mExpandedIds, adapter.getGroupId(i)) >= 0)
-			{
-				Log.d(TAG, "NOW EXPANDING GROUPS: " + i);
-				mExpandableListView.expandGroup(i);
-			}
-		}
-	}
-
-
-	@Override
-	public void onChildLoaded(int pos)
-	{
-		if (mActivatedPositionGroup != ExpandableListView.INVALID_POSITION)
-		{
-			if (pos == mActivatedPositionGroup && mActivatedPositionChild != ExpandableListView.INVALID_POSITION)
-			{
-				Log.d(TAG, "Restoring Child Postion : " + mActivatedPositionChild);
-				Log.d(TAG, "Restoring Group Position : " + mActivatedPositionGroup);
-				mHandler.post(setOpenHandler);
-			}
-		}
-	}
-
-
-	public int getOpenChildPosition()
-	{
-		return mActivatedPositionChild;
-	}
-
-
-	public int getOpenGroupPosition()
-	{
-		return mActivatedPositionGroup;
-	}
-
-
-	public void setOpenChildPosition(int openChildPosition)
-	{
-		mActivatedPositionChild = openChildPosition;
-
-	}
-
-
-	public void setOpenGroupPosition(int openGroupPosition)
-	{
-		mActivatedPositionGroup = openGroupPosition;
-
-	}
-
-	Runnable setOpenHandler = new Runnable()
-	{
-		@Override
-		public void run()
-		{
-			selectChildView(mExpandableListView, mActivatedPositionGroup, mActivatedPositionChild, false);
-			setExpandedGroups();
-			setActivatedItem(mActivatedPositionGroup, mActivatedPositionChild);
-		}
-	};
-
-
-	public void setExpandedGroupsIds(long[] ids)
-	{
-		Log.d(TAG, "SET EXPAND :" + ids);
-		mExpandedIds = ids;
-
-	}
-
-
-	public void setActivatedItem(int groupPosition, int childPosition)
-	{
-		if (groupPosition != ExpandableListView.INVALID_POSITION && groupPosition < mAdapter.getGroupCount()
-			&& childPosition != ExpandableListView.INVALID_POSITION && childPosition < mAdapter.getChildrenCount(groupPosition))
-		{
-			try
-			{
-				mExpandableListView.setItemChecked(
-					mExpandableListView.getFlatListPosition(ExpandableListView.getPackedPositionForChild(groupPosition, childPosition)), true);
-			}
-			catch (NullPointerException e)
-			{
-				// for now we just catch the NPE until we've found the reason
-				// just catching it won't hurt, it's just that the list selection won't be updated properly
-
-				// FIXME: find the actual cause and fix it
-			}
-		}
-	}
-
-
 	/**
 	 * Trigger a synchronization for all accounts.
 	 */
@@ -645,51 +575,8 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 			// TODO: do we need a new bundle for each account or can we reuse it?
 			Bundle extras = new Bundle();
 			extras.putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true);
-			ContentResolver.requestSync(account, TaskContract.AUTHORITY, extras);
+			ContentResolver.requestSync(account, mAuthority, extras);
 		}
-	}
-
-
-	@Override
-	public void onModelLoaded(Model model)
-	{
-		// nothing to do, we've just loaded the default model to speed up loading the detail view and the editor view.
-	}
-
-
-	/**
-	 * Mark the given task as completed.
-	 * 
-	 * @param taskUri
-	 *            The {@link Uri} of the task.
-	 * @param taskTitle
-	 *            The name/title of the task.
-	 * @param completedValue
-	 *            The value to be set for the completed status.
-	 * @return <code>true</code> if the operation was successful, <code>false</code> otherwise.
-	 */
-	private boolean setCompleteTask(Uri taskUri, String taskTitle, boolean completedValue)
-	{
-		ContentValues values = new ContentValues();
-		values.put(Tasks.STATUS, completedValue ? Tasks.STATUS_COMPLETED : Tasks.STATUS_IN_PROCESS);
-		if (!completedValue)
-		{
-			values.put(Tasks.PERCENT_COMPLETE, 99);
-		}
-
-		boolean completed = mAppContext.getContentResolver().update(taskUri, values, null, null) != 0;
-		if (completed)
-		{
-			if (completedValue)
-			{
-				Toast.makeText(mAppContext, getString(R.string.toast_task_completed, taskTitle), Toast.LENGTH_SHORT).show();
-			}
-			else
-			{
-				Toast.makeText(mAppContext, getString(R.string.toast_task_uncompleted, taskTitle), Toast.LENGTH_SHORT).show();
-			}
-		}
-		return completed;
 	}
 
 
@@ -733,10 +620,11 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 	 * @param taskTitle
 	 *            The name/title of the task.
 	 */
-	private void openTaskEditor(final Uri taskUri, final String taskTitle)
+	private void openTaskEditor(final Uri taskUri, final String accountType)
 	{
 		Intent editTaskIntent = new Intent(Intent.ACTION_EDIT);
 		editTaskIntent.setData(taskUri);
+		editTaskIntent.putExtra(EditTaskActivity.EXTRA_DATA_ACCOUNT_TYPE, accountType);
 		startActivity(editTaskIntent);
 	}
 
@@ -754,63 +642,6 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 		{
 			return 0;
 		}
-	}
-
-
-	@Override
-	public boolean onFlingEnd(ListView v, View listElement, int pos, int direction)
-	{
-		long packedPos = mExpandableListView.getExpandableListPosition(pos);
-		if (ExpandableListView.getPackedPositionType(packedPos) == ExpandableListView.PACKED_POSITION_TYPE_CHILD)
-		{
-			ExpandableListAdapter listAdapter = mExpandableListView.getExpandableListAdapter();
-			Cursor cursor = (Cursor) listAdapter.getChild(ExpandableListView.getPackedPositionGroup(packedPos),
-				ExpandableListView.getPackedPositionChild(packedPos));
-
-			if (cursor != null)
-			{
-				// TODO: for now we get the id of the task, not the instance, once we support recurrence we'll have to change that
-				Long taskId = cursor.getLong(cursor.getColumnIndex(Instances.TASK_ID));
-
-				if (taskId != null)
-				{
-					boolean closed = cursor.getLong(cursor.getColumnIndex(Instances.IS_CLOSED)) > 0;
-					String title = cursor.getString(cursor.getColumnIndex(Instances.TITLE));
-					// TODO: use the instance URI once we support recurrence
-					Uri taskUri = ContentUris.withAppendedId(Tasks.CONTENT_URI, taskId);
-
-					if (direction == FlingDetector.RIGHT_FLING)
-					{
-						if (closed)
-						{
-							removeTask(taskUri, title);
-							// we do not know for sure if the task has been removed since the user is asked for confirmation first, so return false
-
-							return false;
-
-						}
-						else
-						{
-							return setCompleteTask(taskUri, title, true);
-						}
-					}
-					else if (direction == FlingDetector.LEFT_FLING)
-					{
-						if (closed)
-						{
-							return setCompleteTask(taskUri, title, false);
-						}
-						else
-						{
-							openTaskEditor(taskUri, title);
-							return false;
-						}
-					}
-				}
-			}
-		}
-
-		return false;
 	}
 
 
@@ -853,12 +684,12 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 						leftFlingView.setText(R.string.fling_task_delete);
 						leftFlingView.setCompoundDrawablesWithIntrinsicBounds(resources.getDrawable(R.drawable.content_discard), null, null, null);
 						rightFlingView.setText(R.string.fling_task_uncomplete);
-						rightFlingView.setCompoundDrawablesWithIntrinsicBounds(null, null, resources.getDrawable(R.drawable.content_remove), null);
+						rightFlingView.setCompoundDrawablesWithIntrinsicBounds(null, null, resources.getDrawable(R.drawable.content_remove_light), null);
 					}
 					else
 					{
 						leftFlingView.setText(R.string.fling_task_complete);
-						leftFlingView.setCompoundDrawablesWithIntrinsicBounds(resources.getDrawable(R.drawable.navigation_accept), null, null, null);
+						leftFlingView.setCompoundDrawablesWithIntrinsicBounds(resources.getDrawable(R.drawable.ic_action_complete), null, null, null);
 						rightFlingView.setText(R.string.fling_task_edit);
 						rightFlingView.setCompoundDrawablesWithIntrinsicBounds(null, null, resources.getDrawable(R.drawable.content_edit), null);
 					}
@@ -879,6 +710,63 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 
 
 	@Override
+	public boolean onFlingEnd(ListView v, View listElement, int pos, int direction)
+	{
+		long packedPos = mExpandableListView.getExpandableListPosition(pos);
+		if (ExpandableListView.getPackedPositionType(packedPos) == ExpandableListView.PACKED_POSITION_TYPE_CHILD)
+		{
+			ExpandableListAdapter listAdapter = mExpandableListView.getExpandableListAdapter();
+			Cursor cursor = (Cursor) listAdapter.getChild(ExpandableListView.getPackedPositionGroup(packedPos),
+				ExpandableListView.getPackedPositionChild(packedPos));
+
+			if (cursor != null)
+			{
+				// TODO: for now we get the id of the task, not the instance, once we support recurrence we'll have to change that
+				Long taskId = cursor.getLong(cursor.getColumnIndex(Instances.TASK_ID));
+
+				if (taskId != null)
+				{
+					boolean closed = cursor.getLong(cursor.getColumnIndex(Instances.IS_CLOSED)) > 0;
+					String title = cursor.getString(cursor.getColumnIndex(Instances.TITLE));
+					// TODO: use the instance URI once we support recurrence
+					Uri taskUri = ContentUris.withAppendedId(Tasks.getContentUri(mAuthority), taskId);
+
+					if (direction == FlingDetector.RIGHT_FLING)
+					{
+						if (closed)
+						{
+							removeTask(taskUri, title);
+							// we do not know for sure if the task has been removed since the user is asked for confirmation first, so return false
+
+							return false;
+
+						}
+						else
+						{
+							return setCompleteTask(taskUri, title, true);
+						}
+					}
+					else if (direction == FlingDetector.LEFT_FLING)
+					{
+						if (closed)
+						{
+							return setCompleteTask(taskUri, title, false);
+						}
+						else
+						{
+							openTaskEditor(taskUri, cursor.getString(cursor.getColumnIndex(Instances.ACCOUNT_TYPE)));
+							return false;
+						}
+					}
+				}
+			}
+		}
+
+		return false;
+	}
+
+
+	@Override
 	public void onFlingCancel(int direction)
 	{
 		// TODO Auto-generated method stub
@@ -893,9 +781,292 @@ public class TaskListFragment extends SupportFragment implements LoaderManager.L
 			TaskListActivity activity = (TaskListActivity) getActivity();
 			if (activity != null)
 			{
-				mGroupDescriptor = activity.getGroupDescriptor(mInstancePosition);
+				mGroupDescriptor = activity.getGroupDescriptor(mPageId);
 			}
 		}
 	}
 
+
+	/**
+	 * Starts the automatic list view redraw (e.g. to display changing time values) on the next minute.
+	 */
+	public void startAutomaticRedraw()
+	{
+		long now = System.currentTimeMillis();
+		long millisToInterval = INTERVAL_LISTVIEW_REDRAW - (now % INTERVAL_LISTVIEW_REDRAW);
+
+		mHandler.postDelayed(mListRedrawRunnable, millisToInterval);
+	}
+
+
+	/**
+	 * Stops the automatic list view redraw.
+	 * 
+	 */
+	public void stopAutomaticRedraw()
+	{
+		mHandler.removeCallbacks(mListRedrawRunnable);
+	}
+
+
+	public int getOpenChildPosition()
+	{
+		return mActivatedPositionChild;
+	}
+
+
+	public int getOpenGroupPosition()
+	{
+		return mActivatedPositionGroup;
+	}
+
+
+	/**
+	 * Turns on activate-on-click mode. When this mode is on, list items will be given the 'activated' state when touched.
+	 * <p>
+	 * Note: this does not work 100% with {@link ExpandableListView}, it doesn't check touched items automatically.
+	 * </p>
+	 * 
+	 * @param activateOnItemClick
+	 *            Whether to enable single choice mode or not.
+	 */
+	public void setActivateOnItemClick(boolean activateOnItemClick)
+	{
+		mExpandableListView.setChoiceMode(activateOnItemClick ? ListView.CHOICE_MODE_SINGLE : ListView.CHOICE_MODE_NONE);
+	}
+
+
+	@TargetApi(Build.VERSION_CODES.HONEYCOMB)
+	public void setListViewScrollbarPositionLeft(boolean left)
+	{
+		if (android.os.Build.VERSION.SDK_INT >= 11)
+		{
+			if (left)
+			{
+				mExpandableListView.setVerticalScrollbarPosition(View.SCROLLBAR_POSITION_LEFT);
+				// expandLV.setScrollBarStyle(style);
+			}
+			else
+			{
+				mExpandableListView.setVerticalScrollbarPosition(View.SCROLLBAR_POSITION_RIGHT);
+			}
+		}
+	}
+
+
+	public void setExpandableGroupDescriptor(ExpandableGroupDescriptor groupDescriptor)
+	{
+		mGroupDescriptor = groupDescriptor;
+	}
+
+
+	/**
+	 * Mark the given task as completed.
+	 * 
+	 * @param taskUri
+	 *            The {@link Uri} of the task.
+	 * @param taskTitle
+	 *            The name/title of the task.
+	 * @param completedValue
+	 *            The value to be set for the completed status.
+	 * @return <code>true</code> if the operation was successful, <code>false</code> otherwise.
+	 */
+	private boolean setCompleteTask(Uri taskUri, String taskTitle, boolean completedValue)
+	{
+		ContentValues values = new ContentValues();
+		values.put(Tasks.STATUS, completedValue ? Tasks.STATUS_COMPLETED : Tasks.STATUS_IN_PROCESS);
+		if (!completedValue)
+		{
+			values.put(Tasks.PERCENT_COMPLETE, 50);
+		}
+
+		boolean completed = mAppContext.getContentResolver().update(taskUri, values, null, null) != 0;
+		if (completed)
+		{
+			if (completedValue)
+			{
+				Toast.makeText(mAppContext, getString(R.string.toast_task_completed, taskTitle), Toast.LENGTH_SHORT).show();
+			}
+			else
+			{
+				Toast.makeText(mAppContext, getString(R.string.toast_task_uncompleted, taskTitle), Toast.LENGTH_SHORT).show();
+			}
+		}
+		return completed;
+	}
+
+
+	public void setOpenChildPosition(int openChildPosition)
+	{
+		mActivatedPositionChild = openChildPosition;
+
+	}
+
+
+	public void setOpenGroupPosition(int openGroupPosition)
+	{
+		mActivatedPositionGroup = openGroupPosition;
+
+	}
+
+
+	public void notifyDataSetChanged(boolean expandFirst)
+	{
+		getLoaderManager().restartLoader(-1, null, this);
+	}
+
+	Runnable setOpenHandler = new Runnable()
+	{
+		@Override
+		public void run()
+		{
+			selectChildView(mExpandableListView, mActivatedPositionGroup, mActivatedPositionChild, false);
+			mExpandableListView.expandGroups(mSavedExpandedGroups);
+			setActivatedItem(mActivatedPositionGroup, mActivatedPositionChild);
+		}
+	};
+
+
+	public void setActivatedItem(int groupPosition, int childPosition)
+	{
+		if (groupPosition != ExpandableListView.INVALID_POSITION && groupPosition < mAdapter.getGroupCount()
+			&& childPosition != ExpandableListView.INVALID_POSITION && childPosition < mAdapter.getChildrenCount(groupPosition))
+		{
+			try
+			{
+				mExpandableListView.setItemChecked(
+					mExpandableListView.getFlatListPosition(ExpandableListView.getPackedPositionForChild(groupPosition, childPosition)), true);
+			}
+			catch (NullPointerException e)
+			{
+				// for now we just catch the NPE until we've found the reason
+				// just catching it won't hurt, it's just that the list selection won't be updated properly
+
+				// FIXME: find the actual cause and fix it
+			}
+		}
+	}
+
+
+	public void expandCurrentSearchGroup()
+	{
+		if (mPageId == R.id.task_group_search && mAdapter.getGroupCount() > 0)
+		{
+			Cursor c = mAdapter.getGroup(0);
+			if (c != null && c.getInt(c.getColumnIndex(SearchHistoryColumns.HISTORIC)) < 1)
+			{
+				mExpandableListView.expandGroup(0);
+			}
+		}
+	}
+
+
+	public void setPageId(int pageId)
+	{
+		mPageId = pageId;
+	}
+
+
+	private void selectChild(final int groupPosition, Cursor childCursor)
+	{
+		mSelectedTaskUri = ((TaskListActivity) getActivity()).getSelectedTaskUri();
+		if (mSelectedTaskUri != null)
+		{
+			new AsyncSelectChildTask().execute(new SelectChildTaskParams(groupPosition, childCursor, mSelectedTaskUri));
+		}
+	}
+
+
+	public void openSelectedChild()
+	{
+		if (mSelectedChildPosition != null)
+		{
+			// post delayed to allow the list view to finish creation
+			mExpandableListView.postDelayed(new Runnable()
+			{
+				@Override
+				public void run()
+				{
+					mSelectedChildPosition.flatListPosition = mExpandableListView.getFlatListPosition(RetainExpandableListView.getPackedPositionForChild(
+						mSelectedChildPosition.groupPosition, mSelectedChildPosition.childPosition));
+
+					mExpandableListView.expandGroup(mSelectedChildPosition.groupPosition);
+					setActivatedItem(mSelectedChildPosition.groupPosition, mSelectedChildPosition.childPosition);
+					selectChildView(mExpandableListView, mSelectedChildPosition.groupPosition, mSelectedChildPosition.childPosition, true);
+					mExpandableListView.smoothScrollToPosition(mSelectedChildPosition.flatListPosition);
+				}
+			}, 0);
+		}
+	}
+
+
+	/** Returns the position of the task in the cursor. Returns -1 if the task is not in the cursor **/
+	private int getSelectedChildPostion(Uri taskUri, Cursor listCursor)
+	{
+		if (taskUri != null && listCursor != null && listCursor.moveToFirst())
+		{
+			Long taskIdToSelect = Long.valueOf(taskUri.getLastPathSegment());
+			do
+			{
+				Long taskId = listCursor.getLong(listCursor.getColumnIndex(Tasks._ID));
+				if (taskId.equals(taskIdToSelect))
+				{
+					return listCursor.getPosition();
+				}
+			} while (listCursor.moveToNext());
+		}
+		return -1;
+	}
+
+	private static class SelectChildTaskParams
+	{
+		int groupPosition;
+		Uri taskUriToSelect;
+		Cursor childCursor;
+
+
+		SelectChildTaskParams(int groupPosition, Cursor childCursor, Uri taskUriToSelect)
+		{
+			this.groupPosition = groupPosition;
+			this.childCursor = childCursor;
+			this.taskUriToSelect = taskUriToSelect;
+		}
+	}
+
+	private static class ListPosition
+	{
+		int groupPosition;
+		int childPosition;
+		int flatListPosition;
+
+
+		ListPosition(int groupPosition, int childPosition)
+		{
+			this.groupPosition = groupPosition;
+			this.childPosition = childPosition;
+		}
+	}
+
+	private class AsyncSelectChildTask extends AsyncTask<SelectChildTaskParams, Void, Void>
+	{
+
+		@Override
+		protected Void doInBackground(SelectChildTaskParams... params)
+		{
+			int count = params.length;
+			for (int i = 0; i < count; i++)
+			{
+				final SelectChildTaskParams param = params[i];
+
+				final int childPosition = getSelectedChildPostion(param.taskUriToSelect, param.childCursor);
+				if (childPosition > -1)
+				{
+					mSelectedChildPosition = new ListPosition(param.groupPosition, childPosition);
+					openSelectedChild();
+				}
+			}
+			return null;
+		}
+
+	}
 }

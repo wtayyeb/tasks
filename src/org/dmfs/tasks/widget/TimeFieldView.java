@@ -21,18 +21,23 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.TimeZone;
 
+import org.dmfs.tasks.R;
 import org.dmfs.tasks.model.ContentSet;
 import org.dmfs.tasks.model.FieldDescriptor;
 import org.dmfs.tasks.model.adapters.FieldAdapter;
 import org.dmfs.tasks.model.adapters.TimeFieldAdapter;
 import org.dmfs.tasks.model.adapters.TimeZoneWrapper;
+import org.dmfs.tasks.model.layout.LayoutDescriptor;
 import org.dmfs.tasks.model.layout.LayoutOptions;
+import org.dmfs.tasks.utils.DateFormatter;
+import org.dmfs.tasks.utils.DateFormatter.DateFormatContext;
 
 import android.content.Context;
 import android.text.format.DateFormat;
 import android.text.format.Time;
 import android.util.AttributeSet;
 import android.view.View;
+import android.view.View.OnClickListener;
 import android.widget.TextView;
 
 
@@ -42,7 +47,7 @@ import android.widget.TextView;
  * @author Arjun Naik <arjun@arjunnaik.in>
  * @author Marten Gajda <marten@dmfs.org>
  */
-public final class TimeFieldView extends AbstractFieldView
+public final class TimeFieldView extends AbstractFieldView implements OnClickListener
 {
 	/**
 	 * {@link TimeZone} UTC, we use it when showing all-day dates.
@@ -74,22 +79,30 @@ public final class TimeFieldView extends AbstractFieldView
 	 */
 	private TimeZone mDefaultTimeZone = new TimeZoneWrapper();
 
+	private TextView mAddOneHourButton;
+	private TextView mAddOneDayButton;
+
+	private final DateFormatter mDateFormatter;
+
 
 	public TimeFieldView(Context context, AttributeSet attrs, int defStyle)
 	{
 		super(context, attrs, defStyle);
+		mDateFormatter = new DateFormatter(context);
 	}
 
 
 	public TimeFieldView(Context context, AttributeSet attrs)
 	{
 		super(context, attrs);
+		mDateFormatter = new DateFormatter(context);
 	}
 
 
 	public TimeFieldView(Context context)
 	{
 		super(context);
+		mDateFormatter = new DateFormatter(context);
 	}
 
 
@@ -101,6 +114,18 @@ public final class TimeFieldView extends AbstractFieldView
 		mTimeZoneText = (TextView) findViewById(android.R.id.text2);
 		mDefaultDateFormat = java.text.DateFormat.getDateInstance(SimpleDateFormat.LONG);
 		mDefaultTimeFormat = DateFormat.getTimeFormat(getContext());
+		mAddOneDayButton = (TextView) findViewById(R.id.button_add_one_day);
+		if (mAddOneDayButton != null)
+		{
+			// might be called to early in Android 2.x
+			mAddOneDayButton.setOnClickListener(this);
+		}
+		mAddOneHourButton = (TextView) findViewById(R.id.button_add_one_hour);
+		if (mAddOneHourButton != null)
+		{
+			// might be called to early in Android 2.x
+			mAddOneHourButton.setOnClickListener(this);
+		}
 	}
 
 
@@ -110,6 +135,7 @@ public final class TimeFieldView extends AbstractFieldView
 		super.setFieldDescription(descriptor, layoutOptions);
 		mAdapter = (TimeFieldAdapter) descriptor.getFieldAdapter();
 		mText.setHint(descriptor.getHint());
+		findViewById(R.id.buttons).setVisibility(layoutOptions.getBoolean(LayoutDescriptor.OPTION_TIME_FIELD_SHOW_ADD_BUTTONS, false) ? VISIBLE : GONE);
 	}
 
 
@@ -127,7 +153,7 @@ public final class TimeFieldView extends AbstractFieldView
 				mDefaultTimeFormat.setTimeZone(mDefaultTimeZone);
 				TimeZoneWrapper taskTimeZone = new TimeZoneWrapper(newValue.timezone);
 
-				formattedTime = mDefaultDateFormat.format(fullDate) + " " + mDefaultTimeFormat.format(fullDate);
+				formattedTime = mDateFormatter.format(newValue, DateFormatContext.DETAILS_VIEW);
 
 				if (!taskTimeZone.equals(mDefaultTimeZone) && mAdapter.hasTimeZoneField() && mTimeZoneText != null)
 				{
@@ -145,12 +171,18 @@ public final class TimeFieldView extends AbstractFieldView
 				{
 					mTimeZoneText.setVisibility(View.GONE);
 				}
+
+				mAddOneHourButton.setVisibility(VISIBLE);
 			}
 			else
 			{
 				// all-day times are always in UTC
-				mDefaultDateFormat.setTimeZone(UTC);
-				formattedTime = mDefaultDateFormat.format(fullDate);
+				if (mTimeZoneText != null)
+				{
+					mTimeZoneText.setVisibility(View.GONE);
+				}
+				formattedTime = mDateFormatter.format(newValue, DateFormatContext.DETAILS_VIEW);
+				mAddOneHourButton.setVisibility(INVISIBLE);
 			}
 			mText.setText(formattedTime);
 			setVisibility(View.VISIBLE);
@@ -159,5 +191,24 @@ public final class TimeFieldView extends AbstractFieldView
 		{
 			setVisibility(View.GONE);
 		}
+	}
+
+
+	@Override
+	public void onClick(View v)
+	{
+		int id = v.getId();
+		Time time = mAdapter.get(mValues);
+		if (id == R.id.button_add_one_day)
+		{
+			time.monthDay++;
+			time.normalize(true);
+		}
+		else if (id == R.id.button_add_one_hour)
+		{
+			time.hour++;
+			time.normalize(false);
+		}
+		mAdapter.validateAndSet(mValues, time);
 	}
 }
